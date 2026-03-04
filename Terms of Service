@@ -1,0 +1,154 @@
+TBT Bot – Privacy Policy
+Last updated: February 2026
+TBT Bot (“the Bot”) is a custom Discord bot created for use within the TB Server community. This Privacy Policy explains what information the Bot collects, how it is used, and how it is protected.
+
+1. Information the Bot Collects
+The Bot may collect and store the following limited information:
+a. User-Triggered Commands
+When users interact with the Bot (for example: !tyrone, /warn, /request-kick, /rqsong), the Bot may record:
+Discord User ID
+
+
+Username / Tag
+
+
+Content of the command
+
+
+Timestamp of the interaction
+
+
+b. Moderation System Data
+For features such as strikes, warnings, or moderation requests, the Bot may store:
+User ID of the reported user
+
+
+Reason for the action
+
+
+Strike count or disciplinary history
+
+
+Admin decisions or approvals
+
+
+This information is stored only to make moderation tools function correctly.
+c. Optional Song Requests
+Song requests may include:
+Song name / link
+
+
+User ID of the requester
+
+
+
+2. How the Information Is Used
+The Bot only uses collected data for:
+Moderation features (warnings, strikes, mutes, bans)
+
+
+Processing kick/ban approval workflows
+
+
+Handling song requests
+
+
+Responding to user commands
+
+
+Operating channel-specific features (ex: Tyrone AI replies)
+
+
+Improving user experience within the server
+
+
+No data is shared with any third parties.
+
+3. Data Storage and Retention
+All data is stored securely on the server hosting the Bot.
+
+
+Strike/moderation data may be retained until manually cleared by an admin.
+
+
+Song requests may be deleted after processing.
+
+
+No long-term logging or analytics are performed.
+
+
+
+4. What the Bot Does NOT Collect
+The Bot does NOT collect:
+Passwords
+
+
+Email addresses
+
+
+Phone numbers
+
+
+IP addresses
+
+
+Private messages (DMs)
+
+
+Payment information
+
+
+Any personal info outside your Discord profile
+
+
+The Bot cannot read your private DMs.
+
+5. Data Sharing
+The Bot does not sell, trade, or share any user data with:
+Advertisers
+
+
+Third-party companies
+
+
+Other Discord servers
+
+
+Any external services (except Spotify API only when you explicitly trigger a song request addition)
+
+
+
+6. User Permissions & Control
+If you are a user in the server, you have the right to:
+Ask what data the Bot has stored about you
+
+
+Request deletion of moderation history (at staff discretion)
+
+
+Stop using the Bot at any time by leaving the server
+
+
+Admins may manually clear or reset Bot data upon request.
+
+7. Security
+Steps are taken to keep data safe:
+Limited access to the Bot and its hosting environment
+
+
+Use of secure API keys and encrypted communication
+
+
+No public exposure of stored data
+
+
+However, no system is 100 percent secure.
+By using the Bot, you acknowledge this.
+
+8. Changes to This Policy
+This Privacy Policy may be updated from time to time. Changes will take effect immediately when posted.
+
+9. Contact
+If you have questions or concerns about this Privacy Policy, please contact the server owner or an administrator in the Discord server.
+
+
