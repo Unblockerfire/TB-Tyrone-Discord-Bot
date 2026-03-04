@@ -18,16 +18,10 @@ const commands = [
     .setName("warn")
     .setDescription("Issue a strike and warning to a user")
     .addUserOption(option =>
-      option
-        .setName("user")
-        .setDescription("User to warn")
-        .setRequired(true)
+      option.setName("user").setDescription("User to warn").setRequired(true)
     )
     .addStringOption(option =>
-      option
-        .setName("reason")
-        .setDescription("Reason for the warning")
-        .setRequired(true)
+      option.setName("reason").setDescription("Reason for the warning").setRequired(true)
     ),
 
   // -------- STRIKES --------
@@ -35,10 +29,7 @@ const commands = [
     .setName("strikes")
     .setDescription("View strikes and warnings for a user")
     .addUserOption(option =>
-      option
-        .setName("user")
-        .setDescription("User to inspect")
-        .setRequired(true)
+      option.setName("user").setDescription("User to inspect").setRequired(true)
     ),
 
   // -------- REQUEST KICK --------
@@ -46,16 +37,10 @@ const commands = [
     .setName("request-kick")
     .setDescription("Create a kick request another admin must approve")
     .addUserOption(option =>
-      option
-        .setName("user")
-        .setDescription("User you want kicked")
-        .setRequired(true)
+      option.setName("user").setDescription("User you want kicked").setRequired(true)
     )
     .addStringOption(option =>
-      option
-        .setName("reason")
-        .setDescription("Why should they be kicked?")
-        .setRequired(true)
+      option.setName("reason").setDescription("Why should they be kicked?").setRequired(true)
     ),
 
   // -------- STATUS --------
@@ -75,10 +60,7 @@ const commands = [
         )
     )
     .addStringOption(option =>
-      option
-        .setName("note")
-        .setDescription("Optional extra note")
-        .setRequired(false)
+      option.setName("note").setDescription("Optional extra note").setRequired(false)
     )
     .addIntegerOption(option =>
       option
@@ -101,15 +83,17 @@ const commands = [
     .setName("setup-rules-verify")
     .setDescription("Post the Rules Agreement + Verify panels (owner only)"),
 
+  // -------- TICKETS: SUPPORT PANEL --------
+  new SlashCommandBuilder()
+    .setName("setup-support-panel")
+    .setDescription("Post the Get Support ticket button panel (admin/owner only)"),
+
   // -------- REPORT ISSUE --------
   new SlashCommandBuilder()
     .setName("report-issue")
     .setDescription("Report an issue with Tyrone and attach your latest Tyrone convo link if available")
     .addStringOption(option =>
-      option
-        .setName("details")
-        .setDescription("Optional details about the issue")
-        .setRequired(false)
+      option.setName("details").setDescription("Optional details about the issue").setRequired(false)
     )
 ].map(cmd => cmd.toJSON());
 
