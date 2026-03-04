@@ -10,6 +10,17 @@ const TYRONE_CHANNEL_ID = process.env.TYRONE_CHANNEL_ID || null;
 const TYRONE_ALLOWED_ROLE_ID = process.env.TYRONE_ALLOWED_ROLE_ID || null;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || null;
 
+// (Optional) where /report-issue should post
+const TYRONE_ISSUES_CHANNEL_ID = process.env.TYRONE_ISSUES_CHANNEL_ID || null;
+
+// Cache tuning
+const TYRONE_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const TYRONE_CACHE_MAX_ENTRIES = 500;
+
+// Soft-intercept / approval tuning
+const APPROVAL_WINDOW_MS = 2 * 60 * 1000; // 2 minutes to approve
+const NAG_COOLDOWN_MS = 60 * 1000; // don't nag same user repeatedly
+
 // Add junk / spam words here later if you want Tyrone to ignore them
 const tyroneIgnoreKeywords = [
   // "ratio",
@@ -18,7 +29,6 @@ const tyroneIgnoreKeywords = [
 ];
 
 // Hardcoded server FAQ
-// NOTE: strike policy triggers are intentionally narrower now.
 const tyroneFaqEntries = [
   {
     keys: [
@@ -68,21 +78,18 @@ const tyroneFaqEntries = [
 ];
 
 // ---------- FOLLOW-UP MEMORY ----------
-
 const followUpContext = new Map();
 const FOLLOW_UP_WINDOW_MS = 60 * 1000;
 
-// context shape:
-// {
-//   topic: "strike_lookup" | "strike_policy",
-//   timestamp: number
-// }
+// ---------- SOFT-INTERCEPT MEMORY ----------
+const pendingApprovals = new Map();
+// shape: userId -> { questionText, channelId, messageId, timestamp }
+
+const nagCooldown = new Map();
+// shape: userId -> timestamp
 
 function setFollowUpContext(userId, topic) {
-  followUpContext.set(userId, {
-    topic,
-    timestamp: Date.now()
-  });
+  followUpContext.set(userId, { topic, timestamp: Date.now() });
 }
 
 function getFollowUpContext(userId) {
@@ -93,8 +100,37 @@ function getFollowUpContext(userId) {
     followUpContext.delete(userId);
     return null;
   }
-
   return data;
+}
+
+function setPendingApproval(userId, questionText, channelId, messageId) {
+  pendingApprovals.set(userId, {
+    questionText,
+    channelId,
+    messageId,
+    timestamp: Date.now()
+  });
+}
+
+function getPendingApproval(userId) {
+  const data = pendingApprovals.get(userId);
+  if (!data) return null;
+
+  if (Date.now() - data.timestamp > APPROVAL_WINDOW_MS) {
+    pendingApprovals.delete(userId);
+    return null;
+  }
+  return data;
+}
+
+function canNag(userId) {
+  const last = nagCooldown.get(userId);
+  if (!last) return true;
+  return Date.now() - last > NAG_COOLDOWN_MS;
+}
+
+function markNag(userId) {
+  nagCooldown.set(userId, Date.now());
 }
 
 // ---------- HELPERS ----------
@@ -103,9 +139,7 @@ function matchesFaqEntry(lowerContent) {
   for (const entry of tyroneFaqEntries) {
     for (const key of entry.keys) {
       const keyLower = key.toLowerCase();
-      if (lowerContent.includes(keyLower)) {
-        return entry.answer;
-      }
+      if (lowerContent.includes(keyLower)) return entry.answer;
     }
   }
   return null;
@@ -113,18 +147,12 @@ function matchesFaqEntry(lowerContent) {
 
 function getActionForStrikeCount(strikes) {
   switch (strikes) {
-    case 1:
-      return "a written warning";
-    case 2:
-      return "a 1-hour mute";
-    case 3:
-      return "a 3-hour mute";
-    case 4:
-      return "a temp ban with appeal allowed";
-    case 5:
-      return "a permanent ban";
-    default:
-      return "no further action configured";
+    case 1: return "a written warning";
+    case 2: return "a 1-hour mute";
+    case 3: return "a 3-hour mute";
+    case 4: return "a temp ban with appeal allowed";
+    case 5: return "a permanent ban";
+    default: return "no further action configured";
   }
 }
 
@@ -152,9 +180,7 @@ function isSelfStrikeLookup(loweredQuery) {
 }
 
 function isStrikeCountFollowUp(loweredQuery, priorContext) {
-  if (!priorContext || priorContext.topic !== "strike_lookup") {
-    return false;
-  }
+  if (!priorContext || priorContext.topic !== "strike_lookup") return false;
 
   return (
     loweredQuery.includes("what happens at") ||
@@ -175,6 +201,58 @@ function extractStrikeNumber(loweredQuery) {
   const n = Number(match[1]);
   if (!Number.isInteger(n)) return null;
   return n;
+}
+
+function looksLikeTyroneQuestion(lowered) {
+  if (!lowered) return false;
+  if (lowered.startsWith("!")) return false;
+  if (lowered.length < 6) return false;
+
+  const hasQuestionMark = lowered.includes("?");
+  const startsLikeQuestion =
+    lowered.startsWith("hey") ||
+    lowered.startsWith("yo") ||
+    lowered.startsWith("can ") ||
+    lowered.startsWith("how ") ||
+    lowered.startsWith("what ") ||
+    lowered.startsWith("when ") ||
+    lowered.startsWith("where ") ||
+    lowered.startsWith("why ") ||
+    lowered.startsWith("do ") ||
+    lowered.startsWith("does ");
+
+  const serverKeywords =
+    lowered.includes("strike") ||
+    lowered.includes("mod") ||
+    lowered.includes("staff") ||
+    lowered.includes("self promo") ||
+    lowered.includes("self-promo") ||
+    lowered.includes("schedule") ||
+    lowered.includes("stream");
+
+  if (matchesFaqEntry(lowered)) return true;
+
+  return (hasQuestionMark && serverKeywords) || (startsLikeQuestion && serverKeywords);
+}
+
+function looksLikeBadAiFallback(text) {
+  const t = (text || "").toLowerCase();
+  return (
+    !t ||
+    t.includes("ai is not configured") ||
+    t.includes("having issues talking to the ai backend") ||
+    t.includes("did not get a valid response") ||
+    t.includes("try again later") ||
+    t.includes("ran into an error")
+  );
+}
+
+function addOutro(answerText) {
+  return (
+    `${answerText}\n\n` +
+    `I hope that answered your question ✅ If not, run **!tyrone <follow-up>** ` +
+    `or use **/report-issue** if I acted weird.`
+  );
 }
 
 async function askOpenAIAsTyrone(query, author) {
@@ -230,96 +308,41 @@ async function askOpenAIAsTyrone(query, author) {
   return content.trim();
 }
 
-// ---------- MESSAGE HANDLER ----------
+// Centralized answer pipeline (FAQ -> cache -> OpenAI)
+async function answerQuestion(query, message, db) {
+  const loweredQuery = (query || "").toLowerCase().trim();
 
-async function handleMessage(message, { db }) {
-  if (message.author.bot) return;
-
-  const raw = message.content || "";
-  const content = raw.trim();
-  const lower = content.toLowerCase();
-
-  // simple test command so we know Tyrone is wired
-  if (lower.startsWith("!tytest")) {
-    console.log(`[Tyrone] !tytest from ${message.author.id} in ${message.channelId}`);
-    await message.reply("tytest is working ✅");
-    return;
-  }
-
-  // only handle !tyrone messages
-  if (!lower.startsWith("!tyrone")) return;
-
-  console.log(`[Tyrone] !tyrone from ${message.author.id} in ${message.channelId}: ${content}`);
-
-  // optional channel gate
-  if (TYRONE_CHANNEL_ID && message.channelId !== TYRONE_CHANNEL_ID) {
-    console.log(
-      `[Tyrone] Ignored because TYRONE_CHANNEL_ID=${TYRONE_CHANNEL_ID} and message.channelId=${message.channelId}`
-    );
-    return;
-  }
-
-  // optional role gate
-  if (TYRONE_ALLOWED_ROLE_ID) {
-    const member = message.member;
-    if (!member || !member.roles.cache.has(TYRONE_ALLOWED_ROLE_ID)) {
-      console.log(
-        `[Tyrone] Ignored because user ${message.author.id} does not have TYRONE_ALLOWED_ROLE_ID=${TYRONE_ALLOWED_ROLE_ID}`
-      );
-      return;
-    }
-  }
-
-  // everything after the command
-  const query = content.slice("!tyrone".length).trim();
-
-  // no extra text: just greet
-  if (!query) {
-    await message.reply(`Hey <@${message.author.id}>, how can I help?`);
-    return;
-  }
-
-  const loweredQuery = query.toLowerCase();
-
-  // ignore trash keywords
   if (tyroneIgnoreKeywords.some(k => loweredQuery.includes(k.toLowerCase()))) {
     console.log("[Tyrone] Ignored due to ignore keyword match");
-    return;
+    return null;
   }
 
   const priorContext = getFollowUpContext(message.author.id);
 
-  // ---------- 1) DIRECT SELF STRIKE / WARNING LOOKUP ----------
   if (isSelfStrikeLookup(loweredQuery)) {
     const stats = db.getUserStats(message.author.id);
-
     setFollowUpContext(message.author.id, "strike_lookup");
 
-    await message.reply(
-      `Hey <@${message.author.id}>, you currently have **${stats.strikes} strike${stats.strikes === 1 ? "" : "s"}** and **${stats.warnings} warning${stats.warnings === 1 ? "" : "s"}** on your account.`
-    );
-    return;
+    const txt =
+      `Hey <@${message.author.id}>, you currently have **${stats.strikes} strike${stats.strikes === 1 ? "" : "s"}** ` +
+      `and **${stats.warnings} warning${stats.warnings === 1 ? "" : "s"}** on your account.`;
+
+    return addOutro(txt);
   }
 
-  // ---------- 2) FOLLOW-UP FOR STRIKE LOOKUP / STRIKE QUESTIONS ----------
   if (isStrikeCountFollowUp(loweredQuery, priorContext)) {
     const strikeNum = extractStrikeNumber(loweredQuery);
-
     if (strikeNum !== null) {
       const action = getActionForStrikeCount(strikeNum);
       setFollowUpContext(message.author.id, "strike_lookup");
-
-      await message.reply(
+      return addOutro(
         `Hey <@${message.author.id}>, at **${strikeNum} strike${strikeNum === 1 ? "" : "s"}**, the action is **${action}**.`
       );
-      return;
     }
   }
 
-  // ---------- 3) FAQ ----------
-  let response = matchesFaqEntry(loweredQuery);
-  if (response) {
-    // if they asked about strike policy, remember the topic
+  const faq = matchesFaqEntry(loweredQuery);
+  if (faq) {
     if (
       loweredQuery.includes("strike policy") ||
       loweredQuery.includes("how does the strike system work") ||
@@ -327,30 +350,34 @@ async function handleMessage(message, { db }) {
     ) {
       setFollowUpContext(message.author.id, "strike_policy");
     }
-
-    console.log("[Tyrone] Responding from FAQ");
-    await message.reply(`Hey <@${message.author.id}>, ${response}`);
-    return;
+    return addOutro(`Hey <@${message.author.id}>, ${faq}`);
   }
 
-  // ---------- 4) IF THEY JUST SAID SOMETHING VAGUE AFTER A STRIKE TOPIC ----------
   if (priorContext && (priorContext.topic === "strike_lookup" || priorContext.topic === "strike_policy")) {
     const strikeNum = extractStrikeNumber(loweredQuery);
-
     if (strikeNum !== null) {
       const action = getActionForStrikeCount(strikeNum);
       setFollowUpContext(message.author.id, priorContext.topic);
-
-      await message.reply(
+      return addOutro(
         `Hey <@${message.author.id}>, at **${strikeNum} strike${strikeNum === 1 ? "" : "s"}**, the action is **${action}**.`
       );
-      return;
     }
   }
 
-  // ---------- 5) OPENAI FALLBACK ----------
-  let responseFromAi;
+  // Cache (DB-backed, if present)
+  try {
+    if (db.getTyroneCachedAnswer) {
+      const cached = db.getTyroneCachedAnswer(query, TYRONE_CACHE_MAX_AGE_MS);
+      if (cached) {
+        console.log("[Tyrone] Cache hit");
+        return addOutro(`Hey <@${message.author.id}>, ${cached}`);
+      }
+    }
+  } catch (err) {
+    console.error("[Tyrone cache] get error:", err);
+  }
 
+  let responseFromAi;
   try {
     console.log("[Tyrone] No direct match, sending to OpenAI");
     responseFromAi = await askOpenAIAsTyrone(query, message.author);
@@ -363,9 +390,139 @@ async function handleMessage(message, { db }) {
     responseFromAi = "I did not get a useful answer back. Try asking in a different way.";
   }
 
-  await message.reply(`Hey <@${message.author.id}>, ${responseFromAi}`);
+  try {
+    if (db.setTyroneCachedAnswer && !looksLikeBadAiFallback(responseFromAi)) {
+      db.setTyroneCachedAnswer(query, responseFromAi, TYRONE_CACHE_MAX_ENTRIES);
+    }
+  } catch (err) {
+    console.error("[Tyrone cache] set error:", err);
+  }
+
+  return addOutro(`Hey <@${message.author.id}>, ${responseFromAi}`);
+}
+
+// ---------- SLASH: /report-issue ----------
+async function handleInteraction(interaction, { client, db }) {
+  if (!interaction.isChatInputCommand()) return;
+  if (interaction.commandName !== "report-issue") return;
+
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: "This can only be used in a server.", ephemeral: true });
+    return;
+  }
+
+  if (!TYRONE_ISSUES_CHANNEL_ID) {
+    await interaction.reply({
+      content: "Issue logging isn’t configured yet (missing TYRONE_ISSUES_CHANNEL_ID). Tell Carson to set it in .env.",
+      ephemeral: true
+    });
+    return;
+  }
+
+  const details = interaction.options.getString("details") || "No extra details provided.";
+  const guild = interaction.guild;
+
+  const issuesChannel = await guild.channels.fetch(TYRONE_ISSUES_CHANNEL_ID).catch(() => null);
+  if (!issuesChannel || !issuesChannel.isTextBased()) {
+    await interaction.reply({
+      content: "TYRONE_ISSUES_CHANNEL_ID is invalid or not a text channel. Fix the ID.",
+      ephemeral: true
+    });
+    return;
+  }
+
+  const text =
+    `🧾 **Tyrone Issue Report**\n` +
+    `User: <@${interaction.user.id}> (${interaction.user.tag})\n` +
+    `Channel: <#${interaction.channelId}>\n\n` +
+    `Details:\n${details}`;
+
+  await issuesChannel.send({ content: text, allowedMentions: { parse: [] } });
+
+  await interaction.reply({
+    content: "Got it ✅ I sent your issue report to staff.",
+    ephemeral: true
+  });
+}
+
+// ---------- MESSAGE HANDLER ----------
+async function handleMessage(message, { db }) {
+  if (message.author.bot) return;
+
+  const raw = message.content || "";
+  const content = raw.trim();
+  const lower = content.toLowerCase();
+
+  // optional channel gate (applies to all Tyrone behavior)
+  if (TYRONE_CHANNEL_ID && message.channelId !== TYRONE_CHANNEL_ID) return;
+
+  // optional role gate
+  if (TYRONE_ALLOWED_ROLE_ID) {
+    const member = message.member;
+    if (!member || !member.roles.cache.has(TYRONE_ALLOWED_ROLE_ID)) return;
+  }
+
+  if (lower.startsWith("!tytest")) {
+    console.log(`[Tyrone] !tytest from ${message.author.id} in ${message.channelId}`);
+    await message.reply("tytest is working ✅");
+    return;
+  }
+
+  if (lower === "!tyrone-approve") {
+    const pending = getPendingApproval(message.author.id);
+    if (!pending) {
+      await message.reply(
+        `Hey <@${message.author.id}>, I don't have a recent question queued. Use **!tyrone <your question>** instead.`
+      );
+      return;
+    }
+
+    if (pending.channelId !== message.channelId) {
+      await message.reply(
+        `Hey <@${message.author.id}>, approve that in the same channel where you asked it.`
+      );
+      return;
+    }
+
+    const reply = await answerQuestion(pending.questionText, message, db);
+    pendingApprovals.delete(message.author.id);
+
+    if (reply) await message.reply(reply);
+    return;
+  }
+
+  if (lower.startsWith("!tyrone")) {
+    const query = content.slice("!tyrone".length).trim();
+
+    if (!query) {
+      await message.reply(`Hey <@${message.author.id}>, how can I help?`);
+      return;
+    }
+
+    const reply = await answerQuestion(query, message, db);
+    if (reply) await message.reply(reply);
+    return;
+  }
+
+  // ---------- SOFT INTERCEPT ----------
+  if (looksLikeTyroneQuestion(lower)) {
+    if (!canNag(message.author.id)) return;
+
+    setPendingApproval(message.author.id, content, message.channelId, message.id);
+    markNag(message.author.id);
+
+    const suggested = `!tyrone ${content}`;
+
+    await message.reply(
+      `Hey <@${message.author.id}>, I can answer that, but use **!tyrone** so I don’t spam chats.\n\n` +
+      `Option A: copy/paste this:\n` +
+      `\`${suggested}\`\n\n` +
+      `Option B: type **!tyrone-approve** and I’ll answer your last question.`
+    );
+  }
 }
 
 module.exports = {
-  handleMessage
+  handleMessage,
+  handleInteraction
 };

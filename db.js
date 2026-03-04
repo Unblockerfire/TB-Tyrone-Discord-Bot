@@ -49,6 +49,17 @@ db.prepare(`
   )
 `).run();
 
+// ---------- TYRONE AI CACHE TABLE ----------
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS tyrone_ai_cache (
+    question_key TEXT PRIMARY KEY,
+    answer TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    last_used_at INTEGER NOT NULL,
+    use_count INTEGER NOT NULL DEFAULT 0
+  )
+`).run();
+
 // ---------- PREPARED STATEMENTS ----------
 
 const getUserStatsStmt = db.prepare(`
@@ -98,6 +109,48 @@ const upsertModInterestStmt = db.prepare(`
   ON CONFLICT(user_id) DO UPDATE SET
     interested = excluded.interested,
     updated_at = excluded.updated_at
+`);
+
+// ---------- TYRONE CACHE STATEMENTS ----------
+
+const getTyroneCacheStmt = db.prepare(`
+  SELECT question_key, answer, created_at
+  FROM tyrone_ai_cache
+  WHERE question_key = ?
+`);
+
+const touchTyroneCacheStmt = db.prepare(`
+  UPDATE tyrone_ai_cache
+  SET last_used_at = ?, use_count = use_count + 1
+  WHERE question_key = ?
+`);
+
+const upsertTyroneCacheStmt = db.prepare(`
+  INSERT INTO tyrone_ai_cache (question_key, answer, created_at, last_used_at, use_count)
+  VALUES (@question_key, @answer, @created_at, @last_used_at, 0)
+  ON CONFLICT(question_key) DO UPDATE SET
+    answer = excluded.answer,
+    last_used_at = excluded.last_used_at
+`);
+
+const deleteTyroneCacheStmt = db.prepare(`
+  DELETE FROM tyrone_ai_cache
+  WHERE question_key = ?
+`);
+
+const countTyroneCacheStmt = db.prepare(`
+  SELECT COUNT(*) as cnt
+  FROM tyrone_ai_cache
+`);
+
+const trimOldestTyroneCacheStmt = db.prepare(`
+  DELETE FROM tyrone_ai_cache
+  WHERE question_key IN (
+    SELECT question_key
+    FROM tyrone_ai_cache
+    ORDER BY last_used_at ASC
+    LIMIT ?
+  )
 `);
 
 // ---------- USER STATS HELPERS ----------
@@ -197,220 +250,74 @@ function userHasAnyRole(member, roleIds) {
   if (!Array.isArray(roleIds)) return false;
   return roleIds.some(id => member.roles.cache.has(id));
 }
-// ---------- TEXT COMMAND HANDLER (Tyrone maintenance) ----------
 
-async function handleMessage(message, { client }) {
-  // Ignore bots
-  if (message.author.bot) return;
+// ---------- TYRONE AI CACHE HELPERS ----------
 
-  const content = (message.content || "").trim();
-  const lower = content.toLowerCase();
-
-  // We only care about these two text commands here
-  const isCleanup = lower.startsWith("!tyrone-cleanup");
-  const isStaffLogs = lower.startsWith("!tyrone-staff-logs");
-
-  if (!isCleanup && !isStaffLogs) return;
-
-  // Only allow in the configured maintenance channel
-  if (message.channelId !== TYRONE_MAINTENANCE_CHANNEL_ID) {
-    return;
-  }
-
-  // Only allow certain roles to run these commands
-  const member = message.member;
-  if (!userHasAnyRole(member, TYRONE_MAINTENANCE_ALLOWED_ROLE_IDS)) {
-    await message.reply("You do not have permission to use this command.");
-    return;
-  }
-
-  if (isCleanup) {
-    await runTyroneCleanup(message, { client });
-  } else if (isStaffLogs) {
-    await runStaffLogsExport(message, { client });
-  }
+function normalizeQuestionKey(q) {
+  return (q || "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-// ---------- HELP: split array into chunks ----------
+// Returns string answer or null
+function getTyroneCachedAnswer(question, maxAgeMs = 30 * 24 * 60 * 60 * 1000) {
+  const key = normalizeQuestionKey(question);
+  if (!key) return null;
 
-function chunkArray(arr, size) {
-  const chunks = [];
-  for (let i = 0; i < arr.length; i += size) {
-    chunks.push(arr.slice(i, i + size));
-  }
-  return chunks;
-}
+  const row = getTyroneCacheStmt.get(key);
+  if (!row) return null;
 
-// ---------- IMPLEMENTATION: !tyrone-cleanup (existing behavior stub) ----------
-// NOTE: If you already have a more advanced cleanup implementation, you can
-// merge that logic into here. This version just shows a minimal placeholder.
-
-async function runTyroneCleanup(message, { client }) {
-  const archiveChannel = await client.channels
-    .fetch(TYRONE_ARCHIVE_CHANNEL_ID)
-    .catch(() => null);
-
-  if (!archiveChannel || !archiveChannel.isTextBased()) {
-    await message.reply(
-      "Tyrone archive channel is invalid or missing. Ask the owner to fix it."
-    );
-    return;
+  const now = Date.now();
+  if (now - row.created_at > maxAgeMs) {
+    // expired
+    try {
+      deleteTyroneCacheStmt.run(key);
+    } catch {}
+    return null;
   }
 
-  await message.reply("Starting Tyrone cleanup. This may take a bit.");
-
-  const sourceChannel = message.channel;
-  const tyroneMessages = [];
-
-  let lastId = null;
-  let done = false;
-  let loops = 0;
-
-  while (!done && loops < 20) {
-    loops += 1;
-    const batch = await sourceChannel.messages.fetch({
-      limit: 100,
-      before: lastId || undefined
-    });
-
-    if (batch.size === 0) break;
-
-    for (const msg of batch.values()) {
-      // Messages either sent by Tyrone (the bot),
-      // or messages that used !tyrone / !tytest in this channel
-      const isFromTyrone = msg.author.id === client.user.id;
-      const isTyroneCommand =
-        (msg.content || "").toLowerCase().startsWith("!tyrone") ||
-        (msg.content || "").toLowerCase().startsWith("!tytest");
-
-      if (isFromTyrone || isTyroneCommand) {
-        tyroneMessages.push(msg);
-      }
-    }
-
-    lastId = batch.last().id;
-    if (batch.size < 100) {
-      done = true;
-    }
-  }
-
-  tyroneMessages.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
-
-  await archiveChannel.send(
-    `Tyrone cleanup run by <@${message.author.id}> in <#${sourceChannel.id}>.\n` +
-      `Total messages moved: **${tyroneMessages.length}**`
-  );
-
-  const chunks = chunkArray(tyroneMessages, 15);
-  for (const chunk of chunks) {
-    const lines = chunk.map(m => {
-      const ts = `<t:${Math.floor(m.createdTimestamp / 1000)}:f>`;
-      const content =
-        m.content && m.content.length > 0
-          ? m.content
-          : "[no text content / embed / attachment]";
-      return `**${m.author.tag}** (${m.author.id}) at ${ts}:\n${content}`;
-    });
-
-    await archiveChannel.send(lines.join("\n\n"));
-  }
-
-  // Optionally delete original messages (comment out if you do NOT want this)
+  // update usage stats
   try {
-    await sourceChannel.bulkDelete(
-      tyroneMessages.filter(m => Date.now() - m.createdTimestamp < 14 * 24 * 60 * 60 * 1000), // Discord hard limit 14 days
-      true
-    );
+    touchTyroneCacheStmt.run(now, key);
+  } catch {}
+
+  return row.answer || null;
+}
+
+// Saves answer and trims table if needed
+function setTyroneCachedAnswer(question, answer, maxEntries = 500) {
+  const key = normalizeQuestionKey(question);
+  const safeAnswer = (answer || "").toString().trim();
+  if (!key || !safeAnswer) return false;
+
+  const now = Date.now();
+
+  try {
+    upsertTyroneCacheStmt.run({
+      question_key: key,
+      answer: safeAnswer,
+      created_at: now,
+      last_used_at: now
+    });
   } catch (err) {
-    console.error("Tyrone cleanup bulkDelete error:", err);
+    console.error("[DB] Failed to upsert tyrone cache:", err);
+    return false;
   }
 
-  await message.channel.send(
-    `Tyrone cleanup finished. Moved **${tyroneMessages.length}** messages to <#${TYRONE_ARCHIVE_CHANNEL_ID}>.`
-  );
-}
-
-// ---------- IMPLEMENTATION: !tyrone-staff-logs ----------
-
-async function runStaffLogsExport(message, { client }) {
-  const sourceChannel = message.channel;
-
-  const logChannel = await client.channels
-    .fetch(STAFF_LOG_ARCHIVE_CHANNEL_ID)
-    .catch(() => null);
-
-  if (!logChannel || !logChannel.isTextBased()) {
-    await message.reply(
-      "Staff log channel is invalid or missing. Ask the owner to fix it."
-    );
-    return;
-  }
-
-  await message.reply(
-    "Starting staff log export for this channel. This may take a bit."
-  );
-
-  const staffMessages = [];
-  let lastId = null;
-  let done = false;
-  let loops = 0;
-
-  // Walk backwards through channel history
-  while (!done && loops < 20) {
-    loops += 1;
-    const batch = await sourceChannel.messages.fetch({
-      limit: 100,
-      before: lastId || undefined
-    });
-
-    if (batch.size === 0) break;
-
-    for (const msg of batch.values()) {
-      const member = msg.member;
-      if (
-        member &&
-        member.roles &&
-        member.roles.cache.has(STAFF_LOG_ROLE_ID)
-      ) {
-        staffMessages.push(msg);
-      }
+  // Trim cache if it grows too big
+  try {
+    const { cnt } = countTyroneCacheStmt.get() || { cnt: 0 };
+    if (cnt > maxEntries) {
+      const toDelete = cnt - maxEntries;
+      trimOldestTyroneCacheStmt.run(toDelete);
     }
-
-    lastId = batch.last().id;
-    if (batch.size < 100) {
-      done = true;
-    }
+  } catch (err) {
+    console.error("[DB] Failed to trim tyrone cache:", err);
   }
 
-  staffMessages.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
-
-  await logChannel.send(
-    `Staff log export run by <@${message.author.id}> from <#${sourceChannel.id}>.\n` +
-      `Total staff messages found: **${staffMessages.length}**`
-  );
-
-  const chunks = chunkArray(staffMessages, 20);
-
-  for (const chunk of chunks) {
-    const lines = chunk.map(m => {
-      const ts = `<t:${Math.floor(m.createdTimestamp / 1000)}:f>`;
-      const content =
-        m.content && m.content.length > 0
-          ? m.content
-          : "[no text content / embed / attachment]";
-
-      return `**${m.author.tag}** (${m.author.id}) at ${ts}:\n"${content}"`;
-    });
-
-    await logChannel.send(lines.join("\n\n"));
-  }
-
-  await message.channel.send(
-    `Staff log export finished. Copied **${staffMessages.length}** messages to <#${STAFF_LOG_ARCHIVE_CHANNEL_ID}>.`
-  );
+  return true;
 }
-
-
 
 // ---------- EXPORTS ----------
 
@@ -434,6 +341,10 @@ module.exports = {
 
   // role helpers
   userHasRole,
-  userHasAnyRole
-};
+  userHasAnyRole,
 
+  // tyrone cache
+  normalizeQuestionKey,
+  getTyroneCachedAnswer,
+  setTyroneCachedAnswer
+};

@@ -10,6 +10,7 @@ const songs = require("./commands/songs");
 const status = require("./commands/status");
 const tyrone = require("./commands/tyrone");
 const notifyRoles = require("./commands/notifyRoles");
+const tickets = require("./commands/tickets"); // ✅ NEW
 
 // ---------- CLIENT SETUP ----------
 
@@ -25,6 +26,17 @@ const client = new Client({
 
 client.once("ready", () => {
   console.log(`Logged in as ${client.user.tag}`);
+
+  // ✅ Optional: start background cleanup (auto-close / auto-archive / etc)
+  // Only runs if your tickets file exports it.
+  try {
+    if (tickets && typeof tickets.startTicketJanitor === "function") {
+      tickets.startTicketJanitor(client, { db });
+      console.log("[Tickets] Janitor started ✅");
+    }
+  } catch (err) {
+    console.error("[Tickets] Failed to start janitor:", err);
+  }
 });
 
 // ---------- INTERACTION ROUTER ----------
@@ -59,8 +71,18 @@ client.on("interactionCreate", async (interaction) => {
           await tyrone.handleInteraction(interaction, { client, db });
           break;
 
-        default:
+        // ✅ Tickets (we pass through and let tickets.js decide if it owns the command)
+        default: {
+          const handledByTickets =
+            tickets && typeof tickets.handleInteraction === "function"
+              ? await tickets.handleInteraction(interaction, { client, db })
+              : false;
+
+          // If tickets handled it, stop here
+          if (handledByTickets) return;
+
           break;
+        }
       }
       return;
     }
@@ -86,6 +108,13 @@ client.on("interactionCreate", async (interaction) => {
         db
       });
       if (handledByNotify) return;
+
+      // ✅ Ticket buttons
+      const handledByTickets =
+        tickets && typeof tickets.handleButton === "function"
+          ? await tickets.handleButton(interaction, { client, db })
+          : false;
+      if (handledByTickets) return;
     }
   } catch (err) {
     console.error("interactionCreate error:", err);
@@ -136,6 +165,11 @@ client.on("messageCreate", async (message) => {
 
     // Status auto-reply
     await status.handleMessage(message, { client, db });
+
+    // ✅ Ticket message handling (triage, reminders, etc)
+    if (tickets && typeof tickets.handleMessage === "function") {
+      await tickets.handleMessage(message, { client, db });
+    }
   } catch (err) {
     console.error("messageCreate error:", err);
   }
