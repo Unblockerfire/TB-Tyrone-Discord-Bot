@@ -9,6 +9,7 @@ const moderation = require("./commands/moderation");
 const songs = require("./commands/songs");
 const status = require("./commands/status");
 const tyrone = require("./commands/tyrone");
+const notifyRoles = require("./commands/notifyRoles");
 
 // ---------- CLIENT SETUP ----------
 
@@ -32,6 +33,7 @@ client.on("interactionCreate", async (interaction) => {
   try {
     if (interaction.isChatInputCommand()) {
       switch (interaction.commandName) {
+        // Moderation
         case "warn":
         case "strikes":
         case "request-kick":
@@ -41,8 +43,20 @@ client.on("interactionCreate", async (interaction) => {
           await moderation.handleInteraction(interaction, { client, db });
           break;
 
+        // Status
         case "set-status":
+        case "clear-status":
           await status.handleInteraction(interaction, { client, db });
+          break;
+
+        // Rules + Verify setup
+        case "setup-rules-verify":
+          await notifyRoles.handleInteraction(interaction, { client, db });
+          break;
+
+        // Tyrone issue report
+        case "report-issue":
+          await tyrone.handleInteraction(interaction, { client, db });
           break;
 
         default:
@@ -59,12 +73,19 @@ client.on("interactionCreate", async (interaction) => {
       });
       if (handledByModeration) return;
 
-      // Then song buttons
+      // Song buttons
       const handledBySongs = await songs.handleButton(interaction, {
         client,
         db
       });
       if (handledBySongs) return;
+
+      // Rules/Verify buttons (live in notifyRoles.js now)
+      const handledByNotify = await notifyRoles.handleButton(interaction, {
+        client,
+        db
+      });
+      if (handledByNotify) return;
     }
   } catch (err) {
     console.error("interactionCreate error:", err);
@@ -104,7 +125,7 @@ client.on("messageCreate", async (message) => {
       message.content
     );
 
-    // Moderation text commands (like !tyrone-cleanup, !tyrone-staff-logs)
+    // Moderation text commands
     await moderation.handleMessage(message, { client, db });
 
     // Tyrone AI / FAQ
@@ -113,7 +134,7 @@ client.on("messageCreate", async (message) => {
     // Song requests
     await songs.handleMessage(message, { client, db });
 
-    // Status auto-reply when target user is mentioned
+    // Status auto-reply
     await status.handleMessage(message, { client, db });
   } catch (err) {
     console.error("messageCreate error:", err);
@@ -121,5 +142,4 @@ client.on("messageCreate", async (message) => {
 });
 
 // ---------- LOGIN ----------
-
 client.login(process.env.DISCORD_TOKEN);
