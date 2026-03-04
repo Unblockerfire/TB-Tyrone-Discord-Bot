@@ -1,0 +1,371 @@
+// commands/tyrone.js
+
+// local fetch wrapper so we do not break your existing style
+const fetch = (...args) =>
+  import("node-fetch").then(({ default: fetch }) => fetch(...args));
+
+// ---------- CONFIG ----------
+
+const TYRONE_CHANNEL_ID = process.env.TYRONE_CHANNEL_ID || null;
+const TYRONE_ALLOWED_ROLE_ID = process.env.TYRONE_ALLOWED_ROLE_ID || null;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || null;
+
+// Add junk / spam words here later if you want Tyrone to ignore them
+const tyroneIgnoreKeywords = [
+  // "ratio",
+  // "gyatt",
+  // "ligma"
+];
+
+// Hardcoded server FAQ
+// NOTE: strike policy triggers are intentionally narrower now.
+const tyroneFaqEntries = [
+  {
+    keys: [
+      "how become mod",
+      "how to become mod",
+      "mod app",
+      "mod application",
+      "be staff",
+      "be a mod"
+    ],
+    answer:
+      "To become a mod, use the `/apply` command. It should DM you with the application topic and info you need to fill out."
+  },
+  {
+    keys: [
+      "strike policy",
+      "what is the strike policy",
+      "how does the strike system work",
+      "moderation system"
+    ],
+    answer:
+      "Strike System:\n" +
+      "• 1 Strike → warning\n" +
+      "• 2 Strikes → 1-hour mute\n" +
+      "• 3 Strikes → 3-hour mute\n" +
+      "• 4 Strikes → temp ban (appeal allowed)\n" +
+      "• 5 Strikes → permanent ban (no appeal)\n\n" +
+      "Strikes are issued at staff discretion."
+  },
+  {
+    keys: ["stream schedule", "when do you stream", "what time do you stream", "go live"],
+    answer:
+      "I do not have a fixed schedule yet since I’m new to streaming, but currently I try to stream around **6/7 PM MST** to around **9/9:30 PM MST**."
+  },
+  {
+    keys: [
+      "self promo",
+      "self-promo",
+      "self promotion",
+      "promote my channel",
+      "promote my tiktok",
+      "promote my youtube"
+    ],
+    answer:
+      "Keep any self promo in the **#self-promo** channel. Posting your stuff outside that channel may get removed or warned."
+  }
+];
+
+// ---------- FOLLOW-UP MEMORY ----------
+
+const followUpContext = new Map();
+const FOLLOW_UP_WINDOW_MS = 60 * 1000;
+
+// context shape:
+// {
+//   topic: "strike_lookup" | "strike_policy",
+//   timestamp: number
+// }
+
+function setFollowUpContext(userId, topic) {
+  followUpContext.set(userId, {
+    topic,
+    timestamp: Date.now()
+  });
+}
+
+function getFollowUpContext(userId) {
+  const data = followUpContext.get(userId);
+  if (!data) return null;
+
+  if (Date.now() - data.timestamp > FOLLOW_UP_WINDOW_MS) {
+    followUpContext.delete(userId);
+    return null;
+  }
+
+  return data;
+}
+
+// ---------- HELPERS ----------
+
+function matchesFaqEntry(lowerContent) {
+  for (const entry of tyroneFaqEntries) {
+    for (const key of entry.keys) {
+      const keyLower = key.toLowerCase();
+      if (lowerContent.includes(keyLower)) {
+        return entry.answer;
+      }
+    }
+  }
+  return null;
+}
+
+function getActionForStrikeCount(strikes) {
+  switch (strikes) {
+    case 1:
+      return "a written warning";
+    case 2:
+      return "a 1-hour mute";
+    case 3:
+      return "a 3-hour mute";
+    case 4:
+      return "a temp ban with appeal allowed";
+    case 5:
+      return "a permanent ban";
+    default:
+      return "no further action configured";
+  }
+}
+
+function isSelfStrikeLookup(loweredQuery) {
+  const asksHowMany =
+    loweredQuery.includes("how many") ||
+    loweredQuery.includes("check") ||
+    loweredQuery.includes("show");
+
+  const mentionsStrikes =
+    loweredQuery.includes("strike") ||
+    loweredQuery.includes("strikes") ||
+    loweredQuery.includes("warning") ||
+    loweredQuery.includes("warnings");
+
+  const mentionsSelf =
+    loweredQuery.includes("i have") ||
+    loweredQuery.includes("do i have") ||
+    loweredQuery.includes("my account") ||
+    loweredQuery.includes("on my account") ||
+    loweredQuery.includes("my acc") ||
+    loweredQuery.includes("for me");
+
+  return asksHowMany && mentionsStrikes && mentionsSelf;
+}
+
+function isStrikeCountFollowUp(loweredQuery, priorContext) {
+  if (!priorContext || priorContext.topic !== "strike_lookup") {
+    return false;
+  }
+
+  return (
+    loweredQuery.includes("what happens at") ||
+    loweredQuery.includes("what about") ||
+    loweredQuery.includes("at ") ||
+    loweredQuery === "3" ||
+    loweredQuery === "4" ||
+    loweredQuery === "5" ||
+    loweredQuery === "2" ||
+    loweredQuery === "1"
+  );
+}
+
+function extractStrikeNumber(loweredQuery) {
+  const match = loweredQuery.match(/\b([1-9]|10)\b/);
+  if (!match) return null;
+
+  const n = Number(match[1]);
+  if (!Number.isInteger(n)) return null;
+  return n;
+}
+
+async function askOpenAIAsTyrone(query, author) {
+  if (!OPENAI_API_KEY) {
+    return "AI is not configured yet. Please tell the server owner to set OPENAI_API_KEY.";
+  }
+
+  const systemPrompt =
+    "You are Tyrone, the helper bot for the TB Server (a Discord community). " +
+    "You talk in a friendly, direct way. " +
+    "If the question is about this specific server, prefer these rules when relevant:\n" +
+    "- Mod applications: /apply command DMs the user with the topic.\n" +
+    "- Strike system: 1 = warning, 2 = 1 hour mute, 3 = 3 hour mute, 4 = temp ban (appeal allowed), 5 = perm ban.\n" +
+    "- Self-promo must stay in the #self-promo channel.\n" +
+    "- Streaming schedule is currently informal: usually around 6/7 PM MST to 9/9:30 PM MST.\n" +
+    "If the user asks something unrelated to the server, answer like a normal helpful assistant.";
+
+  const body = {
+    model: "gpt-4.1-mini",
+    messages: [
+      { role: "system", content: systemPrompt },
+      {
+        role: "user",
+        content: `User: ${author.username}#${author.discriminator || ""} (ID ${author.id}) says: ${query}`
+      }
+    ],
+    max_tokens: 350
+  };
+
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${OPENAI_API_KEY}`
+    },
+    body: JSON.stringify(body)
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    console.error("OpenAI API error:", res.status, text);
+    return "Tyrone is having issues talking to the AI backend right now. Try again later.";
+  }
+
+  const data = await res.json();
+  const choice = data.choices && data.choices[0];
+  const content = choice && choice.message && choice.message.content;
+
+  if (!content) {
+    return "I did not get a valid response from the AI. Try again in a bit.";
+  }
+
+  return content.trim();
+}
+
+// ---------- MESSAGE HANDLER ----------
+
+async function handleMessage(message, { db }) {
+  if (message.author.bot) return;
+
+  const raw = message.content || "";
+  const content = raw.trim();
+  const lower = content.toLowerCase();
+
+  // simple test command so we know Tyrone is wired
+  if (lower.startsWith("!tytest")) {
+    console.log(`[Tyrone] !tytest from ${message.author.id} in ${message.channelId}`);
+    await message.reply("tytest is working ✅");
+    return;
+  }
+
+  // only handle !tyrone messages
+  if (!lower.startsWith("!tyrone")) return;
+
+  console.log(`[Tyrone] !tyrone from ${message.author.id} in ${message.channelId}: ${content}`);
+
+  // optional channel gate
+  if (TYRONE_CHANNEL_ID && message.channelId !== TYRONE_CHANNEL_ID) {
+    console.log(
+      `[Tyrone] Ignored because TYRONE_CHANNEL_ID=${TYRONE_CHANNEL_ID} and message.channelId=${message.channelId}`
+    );
+    return;
+  }
+
+  // optional role gate
+  if (TYRONE_ALLOWED_ROLE_ID) {
+    const member = message.member;
+    if (!member || !member.roles.cache.has(TYRONE_ALLOWED_ROLE_ID)) {
+      console.log(
+        `[Tyrone] Ignored because user ${message.author.id} does not have TYRONE_ALLOWED_ROLE_ID=${TYRONE_ALLOWED_ROLE_ID}`
+      );
+      return;
+    }
+  }
+
+  // everything after the command
+  const query = content.slice("!tyrone".length).trim();
+
+  // no extra text: just greet
+  if (!query) {
+    await message.reply(`Hey <@${message.author.id}>, how can I help?`);
+    return;
+  }
+
+  const loweredQuery = query.toLowerCase();
+
+  // ignore trash keywords
+  if (tyroneIgnoreKeywords.some(k => loweredQuery.includes(k.toLowerCase()))) {
+    console.log("[Tyrone] Ignored due to ignore keyword match");
+    return;
+  }
+
+  const priorContext = getFollowUpContext(message.author.id);
+
+  // ---------- 1) DIRECT SELF STRIKE / WARNING LOOKUP ----------
+  if (isSelfStrikeLookup(loweredQuery)) {
+    const stats = db.getUserStats(message.author.id);
+
+    setFollowUpContext(message.author.id, "strike_lookup");
+
+    await message.reply(
+      `Hey <@${message.author.id}>, you currently have **${stats.strikes} strike${stats.strikes === 1 ? "" : "s"}** and **${stats.warnings} warning${stats.warnings === 1 ? "" : "s"}** on your account.`
+    );
+    return;
+  }
+
+  // ---------- 2) FOLLOW-UP FOR STRIKE LOOKUP / STRIKE QUESTIONS ----------
+  if (isStrikeCountFollowUp(loweredQuery, priorContext)) {
+    const strikeNum = extractStrikeNumber(loweredQuery);
+
+    if (strikeNum !== null) {
+      const action = getActionForStrikeCount(strikeNum);
+      setFollowUpContext(message.author.id, "strike_lookup");
+
+      await message.reply(
+        `Hey <@${message.author.id}>, at **${strikeNum} strike${strikeNum === 1 ? "" : "s"}**, the action is **${action}**.`
+      );
+      return;
+    }
+  }
+
+  // ---------- 3) FAQ ----------
+  let response = matchesFaqEntry(loweredQuery);
+  if (response) {
+    // if they asked about strike policy, remember the topic
+    if (
+      loweredQuery.includes("strike policy") ||
+      loweredQuery.includes("how does the strike system work") ||
+      loweredQuery.includes("moderation system")
+    ) {
+      setFollowUpContext(message.author.id, "strike_policy");
+    }
+
+    console.log("[Tyrone] Responding from FAQ");
+    await message.reply(`Hey <@${message.author.id}>, ${response}`);
+    return;
+  }
+
+  // ---------- 4) IF THEY JUST SAID SOMETHING VAGUE AFTER A STRIKE TOPIC ----------
+  if (priorContext && (priorContext.topic === "strike_lookup" || priorContext.topic === "strike_policy")) {
+    const strikeNum = extractStrikeNumber(loweredQuery);
+
+    if (strikeNum !== null) {
+      const action = getActionForStrikeCount(strikeNum);
+      setFollowUpContext(message.author.id, priorContext.topic);
+
+      await message.reply(
+        `Hey <@${message.author.id}>, at **${strikeNum} strike${strikeNum === 1 ? "" : "s"}**, the action is **${action}**.`
+      );
+      return;
+    }
+  }
+
+  // ---------- 5) OPENAI FALLBACK ----------
+  let responseFromAi;
+
+  try {
+    console.log("[Tyrone] No direct match, sending to OpenAI");
+    responseFromAi = await askOpenAIAsTyrone(query, message.author);
+  } catch (err) {
+    console.error("Tyrone AI error:", err);
+    responseFromAi = "Tyrone ran into an error trying to answer that. Try again later.";
+  }
+
+  if (!responseFromAi) {
+    responseFromAi = "I did not get a useful answer back. Try asking in a different way.";
+  }
+
+  await message.reply(`Hey <@${message.author.id}>, ${responseFromAi}`);
+}
+
+module.exports = {
+  handleMessage
+};
