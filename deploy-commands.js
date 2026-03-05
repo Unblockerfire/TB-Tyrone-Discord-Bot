@@ -87,6 +87,11 @@ const commands = [
   new SlashCommandBuilder()
     .setName("setup-support-panel")
     .setDescription("Post the Get Support ticket button panel (admin/owner only)"),
+   
+    // -------- ROLE SELECT PANEL --------
+  new SlashCommandBuilder()
+    .setName("setup-role-panel")
+    .setDescription("Post the notification role select panel (admin/owner only)"),
 
   // -------- REPORT ISSUE --------
   new SlashCommandBuilder()

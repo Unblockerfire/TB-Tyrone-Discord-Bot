@@ -10,7 +10,8 @@ const songs = require("./commands/songs");
 const status = require("./commands/status");
 const tyrone = require("./commands/tyrone");
 const notifyRoles = require("./commands/notifyRoles");
-const tickets = require("./commands/tickets"); // ✅ NEW
+const tickets = require("./commands/tickets"); 
+const roleSelect = require("./commands/roleSelect");
 
 // ---------- CLIENT SETUP ----------
 
@@ -40,7 +41,6 @@ client.once("ready", () => {
 });
 
 // ---------- INTERACTION ROUTER ----------
-
 client.on("interactionCreate", async (interaction) => {
   try {
     if (interaction.isChatInputCommand()) {
@@ -64,6 +64,11 @@ client.on("interactionCreate", async (interaction) => {
         // Rules + Verify setup
         case "setup-rules-verify":
           await notifyRoles.handleInteraction(interaction, { client, db });
+          break;
+
+        // ✅ Role Select Panel
+        case "setup-role-panel":
+          await roleSelect.handleInteraction(interaction, { client, db });
           break;
 
         // Tyrone issue report
@@ -108,6 +113,13 @@ client.on("interactionCreate", async (interaction) => {
         db
       });
       if (handledByNotify) return;
+
+      // ✅ Role Select buttons
+      const handledByRoleSelect =
+        roleSelect && typeof roleSelect.handleButton === "function"
+          ? await roleSelect.handleButton(interaction, { client, db })
+          : false;
+      if (handledByRoleSelect) return;
 
       // ✅ Ticket buttons
       const handledByTickets =
