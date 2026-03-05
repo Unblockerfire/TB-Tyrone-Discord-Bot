@@ -87,11 +87,27 @@ const commands = [
   new SlashCommandBuilder()
     .setName("setup-support-panel")
     .setDescription("Post the Get Support ticket button panel (admin/owner only)"),
-   
-    // -------- ROLE SELECT PANEL --------
+
+  // -------- ROLE SELECT (5 separate commands) --------
   new SlashCommandBuilder()
-    .setName("setup-role-panel")
-    .setDescription("Post the notification role select panel (admin/owner only)"),
+    .setName("setup-live")
+    .setDescription("Post the Live Notifications role button panel (owner/admin)"),
+
+  new SlashCommandBuilder()
+    .setName("setup-chat")
+    .setDescription("Post the Chat Revive role button panel (owner/admin)"),
+
+  new SlashCommandBuilder()
+    .setName("setup-giveaways")
+    .setDescription("Post the Giveaways role button panel (owner/admin)"),
+
+  new SlashCommandBuilder()
+    .setName("setup-announcements")
+    .setDescription("Post the Announcements role button panel (owner/admin)"),
+
+  new SlashCommandBuilder()
+    .setName("setup-notify-all")
+    .setDescription("Post the combined notification roles panel (owner/admin)"),
 
   // -------- REPORT ISSUE --------
   new SlashCommandBuilder()

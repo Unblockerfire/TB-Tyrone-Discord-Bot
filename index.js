@@ -10,7 +10,7 @@ const songs = require("./commands/songs");
 const status = require("./commands/status");
 const tyrone = require("./commands/tyrone");
 const notifyRoles = require("./commands/notifyRoles");
-const tickets = require("./commands/tickets"); 
+const tickets = require("./commands/tickets");
 const roleSelect = require("./commands/roleSelect");
 
 // ---------- CLIENT SETUP ----------
@@ -29,7 +29,6 @@ client.once("ready", () => {
   console.log(`Logged in as ${client.user.tag}`);
 
   // ✅ Optional: start background cleanup (auto-close / auto-archive / etc)
-  // Only runs if your tickets file exports it.
   try {
     if (tickets && typeof tickets.startTicketJanitor === "function") {
       tickets.startTicketJanitor(client, { db });
@@ -66,8 +65,12 @@ client.on("interactionCreate", async (interaction) => {
           await notifyRoles.handleInteraction(interaction, { client, db });
           break;
 
-        // ✅ Role Select Panel
-        case "setup-role-panel":
+        // ✅ Notification role panels (new 5-command system)
+        case "setup-live":
+        case "setup-chat":
+        case "setup-giveaways":
+        case "setup-announcements":
+        case "setup-notify-all":
           await roleSelect.handleInteraction(interaction, { client, db });
           break;
 
@@ -76,16 +79,14 @@ client.on("interactionCreate", async (interaction) => {
           await tyrone.handleInteraction(interaction, { client, db });
           break;
 
-        // ✅ Tickets (we pass through and let tickets.js decide if it owns the command)
+        // ✅ Tickets (tickets.js decides if it owns the command)
         default: {
           const handledByTickets =
             tickets && typeof tickets.handleInteraction === "function"
               ? await tickets.handleInteraction(interaction, { client, db })
               : false;
 
-          // If tickets handled it, stop here
           if (handledByTickets) return;
-
           break;
         }
       }
@@ -107,7 +108,7 @@ client.on("interactionCreate", async (interaction) => {
       });
       if (handledBySongs) return;
 
-      // Rules/Verify buttons (live in notifyRoles.js now)
+      // Rules/Verify buttons
       const handledByNotify = await notifyRoles.handleButton(interaction, {
         client,
         db
