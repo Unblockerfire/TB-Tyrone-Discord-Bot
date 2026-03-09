@@ -1,20 +1,26 @@
 // index.js
 require("dotenv").config();
 
-const { Client, GatewayIntentBits, Partials } = require("discord.js");
+const {
+  Client,
+  GatewayIntentBits,
+  Partials,
+  MessageFlags
+} = require("discord.js");
 
 // Local modules
 const db = require("./db");
 const moderation = require("./commands/moderation");
 const songs = require("./commands/songs");
+const leaderboard = require("./commands/leaderboard");
 const status = require("./commands/status");
 const tyrone = require("./commands/tyrone");
 const notifyRoles = require("./commands/notifyRoles");
 const tickets = require("./commands/tickets");
 const roleSelect = require("./commands/roleSelect");
+const fortniteQueue = require("./commands/fortniteQueue");
 
 // ---------- CLIENT SETUP ----------
-
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -25,10 +31,9 @@ const client = new Client({
   partials: [Partials.GuildMember]
 });
 
-client.once("ready", () => {
+client.once("clientReady", () => {
   console.log(`Logged in as ${client.user.tag}`);
 
-  // ✅ Optional: start background cleanup (auto-close / auto-archive / etc)
   try {
     if (tickets && typeof tickets.startTicketJanitor === "function") {
       tickets.startTicketJanitor(client, { db });
@@ -36,6 +41,15 @@ client.once("ready", () => {
     }
   } catch (err) {
     console.error("[Tickets] Failed to start janitor:", err);
+  }
+
+  try {
+    if (fortniteQueue && typeof fortniteQueue.startFortniteQueueTicker === "function") {
+      fortniteQueue.startFortniteQueueTicker(client, { db });
+      console.log("[Fortnite] Queue ticker started ✅");
+    }
+  } catch (err) {
+    console.error("[Fortnite] Failed to start queue ticker:", err);
   }
 });
 
@@ -52,34 +66,58 @@ client.on("interactionCreate", async (interaction) => {
         case "autofill":
         case "revokestrike":
           await moderation.handleInteraction(interaction, { client, db });
-          break;
+          return;
 
         // Status
         case "set-status":
         case "clear-status":
           await status.handleInteraction(interaction, { client, db });
-          break;
+          return;
 
         // Rules + Verify setup
         case "setup-rules-verify":
           await notifyRoles.handleInteraction(interaction, { client, db });
-          break;
+          return;
 
-        // ✅ Notification role panels (new 5-command system)
+        // Notification role panels
         case "setup-live":
         case "setup-chat":
         case "setup-giveaways":
         case "setup-announcements":
         case "setup-notify-all":
           await roleSelect.handleInteraction(interaction, { client, db });
-          break;
+          return;
+
+        // Leaderboard
+        case "setup-leaderboard":
+        case "leaderboard-add":
+        case "leaderboard-set":
+        case "leaderboard-remove":
+        case "leaderboard-add-likes":
+        case "leaderboard-set-likes":
+        case "leaderboard-reset":
+        case "leaderboard-update":
+          await leaderboard.handleInteraction(interaction, { client, db });
+          return;
+
+        // Fortnite queue
+        case "setup-fort-verify-panel":
+        case "setup-fort-ready-panel":
+        case "setup-fort-queue-display":
+        case "fort-queue-open":
+        case "fort-queue-close":
+        case "fort-queue-status":
+        case "fort-queue-next":
+        case "fort-queue-remove":
+          await fortniteQueue.handleInteraction(interaction, { client, db });
+          return;
 
         // Tyrone issue report
         case "report-issue":
           await tyrone.handleInteraction(interaction, { client, db });
-          break;
+          return;
 
-        // ✅ Tickets (tickets.js decides if it owns the command)
+        // Tickets
         default: {
           const handledByTickets =
             tickets && typeof tickets.handleInteraction === "function"
@@ -87,73 +125,89 @@ client.on("interactionCreate", async (interaction) => {
               : false;
 
           if (handledByTickets) return;
-          break;
+          return;
         }
       }
-      return;
     }
 
     if (interaction.isButton()) {
-      // Moderation buttons first
-      const handledByModeration = await moderation.handleButton(interaction, {
-        client,
-        db
-      });
+      const handledByModeration =
+        moderation && typeof moderation.handleButton === "function"
+          ? await moderation.handleButton(interaction, { client, db })
+          : false;
       if (handledByModeration) return;
 
-      // Song buttons
-      const handledBySongs = await songs.handleButton(interaction, {
-        client,
-        db
-      });
+      const handledBySongs =
+        songs && typeof songs.handleButton === "function"
+          ? await songs.handleButton(interaction, { client, db })
+          : false;
       if (handledBySongs) return;
 
-      // Rules/Verify buttons
-      const handledByNotify = await notifyRoles.handleButton(interaction, {
-        client,
-        db
-      });
+      const handledByNotify =
+        notifyRoles && typeof notifyRoles.handleButton === "function"
+          ? await notifyRoles.handleButton(interaction, { client, db })
+          : false;
       if (handledByNotify) return;
 
-      // ✅ Role Select buttons
       const handledByRoleSelect =
         roleSelect && typeof roleSelect.handleButton === "function"
           ? await roleSelect.handleButton(interaction, { client, db })
           : false;
       if (handledByRoleSelect) return;
 
-      // ✅ Ticket buttons
+      const handledByFortnite =
+        fortniteQueue && typeof fortniteQueue.handleButton === "function"
+          ? await fortniteQueue.handleButton(interaction, { client, db })
+          : false;
+      if (handledByFortnite) return;
+
       const handledByTickets =
         tickets && typeof tickets.handleButton === "function"
           ? await tickets.handleButton(interaction, { client, db })
           : false;
       if (handledByTickets) return;
+
+      return;
+    }
+
+    if (interaction.isModalSubmit()) {
+      const handledByFortnite =
+        fortniteQueue && typeof fortniteQueue.handleModalSubmit === "function"
+          ? await fortniteQueue.handleModalSubmit(interaction, { client, db })
+          : false;
+      if (handledByFortnite) return;
+
+      return;
     }
   } catch (err) {
     console.error("interactionCreate error:", err);
 
+    if (err?.code === 40060 || err?.code === 10062) {
+      return;
+    }
+
     if (interaction.isRepliable()) {
       try {
+        const payload = {
+          content: "Something went wrong handling that interaction.",
+          flags: MessageFlags.Ephemeral
+        };
+
         if (interaction.deferred || interaction.replied) {
-          await interaction.followUp({
-            content: "Something went wrong handling that interaction.",
-            ephemeral: true
-          });
+          await interaction.followUp(payload);
         } else {
-          await interaction.reply({
-            content: "Something went wrong handling that interaction.",
-            ephemeral: true
-          });
+          await interaction.reply(payload);
         }
-      } catch {
-        // ignore follow-up failures
+      } catch (followErr) {
+        if (followErr?.code !== 40060 && followErr?.code !== 10062) {
+          console.error("interactionCreate follow-up error:", followErr);
+        }
       }
     }
   }
 });
 
 // ---------- MESSAGE ROUTER ----------
-
 client.on("messageCreate", async (message) => {
   try {
     if (message.author.bot) return;
@@ -167,19 +221,11 @@ client.on("messageCreate", async (message) => {
       message.content
     );
 
-    // Moderation text commands
     await moderation.handleMessage(message, { client, db });
-
-    // Tyrone AI / FAQ
     await tyrone.handleMessage(message, { client, db });
-
-    // Song requests
     await songs.handleMessage(message, { client, db });
-
-    // Status auto-reply
     await status.handleMessage(message, { client, db });
 
-    // ✅ Ticket message handling (triage, reminders, etc)
     if (tickets && typeof tickets.handleMessage === "function") {
       await tickets.handleMessage(message, { client, db });
     }

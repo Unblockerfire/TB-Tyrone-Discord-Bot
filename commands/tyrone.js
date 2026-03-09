@@ -20,6 +20,7 @@ const TYRONE_CACHE_MAX_ENTRIES = 500;
 // Soft-intercept / approval tuning
 const APPROVAL_WINDOW_MS = 2 * 60 * 1000; // 2 minutes to approve
 const NAG_COOLDOWN_MS = 60 * 1000; // don't nag same user repeatedly
+const AUTO_NAG_DELAY_MS = 2 * 60 * 1000; // wait 2 minutes before suggesting Tyrone
 
 // Add junk / spam words here later if you want Tyrone to ignore them
 const tyroneIgnoreKeywords = [
@@ -87,6 +88,9 @@ const pendingApprovals = new Map();
 
 const nagCooldown = new Map();
 // shape: userId -> timestamp
+
+const delayedNagTimers = new Map();
+// shape: messageId -> timeout
 
 function setFollowUpContext(userId, topic) {
   followUpContext.set(userId, { topic, timestamp: Date.now() });
@@ -253,6 +257,13 @@ function addOutro(answerText) {
     `I hope that answered your question ✅ If not, run **!tyrone <follow-up>** ` +
     `or use **/report-issue** if I acted weird.`
   );
+}
+
+function stripBotMention(content, botId) {
+  if (!content || !botId) return content || "";
+  return content
+    .replace(new RegExp(`<@!?${botId}>`, "g"), "")
+    .trim();
 }
 
 async function askOpenAIAsTyrone(query, author) {
@@ -453,6 +464,9 @@ async function handleMessage(message, { db }) {
   const content = raw.trim();
   const lower = content.toLowerCase();
 
+  const botId = message.client?.user?.id || null;
+  const mentionsTyrone = botId ? message.mentions.users.has(botId) : false;
+
   // optional channel gate (applies to all Tyrone behavior)
   if (TYRONE_CHANNEL_ID && message.channelId !== TYRONE_CHANNEL_ID) return;
 
@@ -491,6 +505,7 @@ async function handleMessage(message, { db }) {
     return;
   }
 
+  // Direct command invoke
   if (lower.startsWith("!tyrone")) {
     const query = content.slice("!tyrone".length).trim();
 
@@ -504,21 +519,51 @@ async function handleMessage(message, { db }) {
     return;
   }
 
-  // ---------- SOFT INTERCEPT ----------
+  // Direct mention invoke
+  if (mentionsTyrone) {
+    const query = stripBotMention(content, botId);
+
+    if (!query) {
+      await message.reply(`Hey <@${message.author.id}>, how can I help?`);
+      return;
+    }
+
+    const reply = await answerQuestion(query, message, db);
+    if (reply) await message.reply(reply);
+    return;
+  }
+
+  // ---------- SOFT INTERCEPT WITH 2-MINUTE DELAY ----------
   if (looksLikeTyroneQuestion(lower)) {
     if (!canNag(message.author.id)) return;
+    if (delayedNagTimers.has(message.id)) return;
 
-    setPendingApproval(message.author.id, content, message.channelId, message.id);
-    markNag(message.author.id);
+    const timer = setTimeout(async () => {
+      delayedNagTimers.delete(message.id);
 
-    const suggested = `!tyrone ${content}`;
+      try {
+        // make sure original message still exists
+        const original = await message.channel.messages.fetch(message.id).catch(() => null);
+        if (!original) return;
 
-    await message.reply(
-      `Hey <@${message.author.id}>, I can answer that, but use **!tyrone** so I don’t spam chats.\n\n` +
-      `Option A: copy/paste this:\n` +
-      `\`${suggested}\`\n\n` +
-      `Option B: type **!tyrone-approve** and I’ll answer your last question.`
-    );
+        // queue the approval only when we're actually about to send the nag
+        setPendingApproval(message.author.id, content, message.channelId, message.id);
+        markNag(message.author.id);
+
+        const suggested = `!tyrone ${content}`;
+
+        await message.reply(
+          `Hey <@${message.author.id}>, I can help with that, but use **!tyrone** so I don’t spam chats.\n\n` +
+          `Option A: copy/paste this:\n` +
+          `\`${suggested}\`\n\n` +
+          `Option B: type **!tyrone-approve** and I’ll answer your last question.`
+        );
+      } catch (err) {
+        console.error("[Tyrone delayed nag] error:", err);
+      }
+    }, AUTO_NAG_DELAY_MS);
+
+    delayedNagTimers.set(message.id, timer);
   }
 }
 
