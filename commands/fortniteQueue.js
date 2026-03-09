@@ -132,6 +132,7 @@ function getEpicUsername(db, userId) {
   return db.getFortniteLink(userId)?.epic_username || "Not linked";
 }
 
+
 function getEntryLabel(db, entry) {
   if (!entry) return "Unknown";
 
@@ -140,6 +141,20 @@ function getEntryLabel(db, entry) {
   }
 
   return `<@${entry.user_id}> - \`${getEpicUsername(db, entry.user_id)}\``;
+}
+
+function getEntryOverlayLabel(db, entry) {
+  if (!entry) return "Unknown";
+
+  if (entry.entry_type === "guest") {
+    return `${entry.guest_name} - ${entry.epic_username}`;
+  }
+
+  return getEpicUsername(db, entry.user_id);
+}
+
+function getQueueOverlayItems(db) {
+  return db.listFortniteQueue().map((entry) => getEntryOverlayLabel(db, entry));
 }
 
 function getEntryMention(entry) {
@@ -1005,5 +1020,7 @@ module.exports = {
   handleInteraction,
   handleButton,
   handleModalSubmit,
-  startFortniteQueueTicker
+  startFortniteQueueTicker,
+  getQueueOverlayItems,
+  getEntryOverlayLabel
 };

@@ -14,10 +14,13 @@ const queue = db.listFortniteQueue();
 const users = queue.map(entry => {
 
 if(entry.entry_type === "guest"){
-return `${entry.guest_name} - ${entry.epic_username}`;
+  return `${entry.guest_name} - ${entry.epic_username}`;
 }
 
-return entry.user_id;
+const link = db.getFortniteLink(entry.user_id);
+const epic = link?.epic_username || "Not linked";
+
+return epic;
 
 });
 
