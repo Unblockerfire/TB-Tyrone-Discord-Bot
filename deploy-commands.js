@@ -207,6 +207,7 @@ const commands = [
   new SlashCommandBuilder()
     .setName("leaderboard-update")
     .setDescription("Force refresh the leaderboard post (owner only)"),
+
   // -------- FORTNITE PANELS / QUEUE --------
   new SlashCommandBuilder()
     .setName("setup-fort-verify-panel")
@@ -253,7 +254,33 @@ const commands = [
         .setDescription("User to remove from queue")
         .setRequired(true)
     ),
-    
+
+  new SlashCommandBuilder()
+    .setName("fort-queue-add-guest")
+    .setDescription("Add a guest to the Fortnite queue (staff only)")
+    .addStringOption(option =>
+      option
+        .setName("name")
+        .setDescription("Guest display name")
+        .setRequired(true)
+    )
+    .addStringOption(option =>
+      option
+        .setName("epic")
+        .setDescription("Guest Fortnite username")
+        .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("fort-queue-remove-guest")
+    .setDescription("Remove a guest from the Fortnite queue (staff only)")
+    .addStringOption(option =>
+      option
+        .setName("name")
+        .setDescription("Guest display name")
+        .setRequired(true)
+    ),
+
   // -------- REPORT ISSUE --------
   new SlashCommandBuilder()
     .setName("report-issue")

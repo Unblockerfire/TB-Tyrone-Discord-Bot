@@ -7,7 +7,7 @@ const db = new Database("tbsbot.db");
 // ---------- TABLE SETUP ----------
 
 // user_stats: Discord strikes and warnings
- db.prepare(`
+db.prepare(`
   CREATE TABLE IF NOT EXISTS user_stats (
     user_id TEXT PRIMARY KEY,
     strikes INTEGER NOT NULL DEFAULT 0,
@@ -85,10 +85,20 @@ try {
   }
 }
 
-// fortnite_queue: users currently queued for party rotation
+// fortnite_queue: Discord users currently queued for party rotation
 db.prepare(`
   CREATE TABLE IF NOT EXISTS fortnite_queue (
     user_id TEXT PRIMARY KEY,
+    queued_at INTEGER NOT NULL
+  )
+`).run();
+
+// fortnite_queue_guests: manual / guest queue users without Discord
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS fortnite_queue_guests (
+    guest_id TEXT PRIMARY KEY,
+    guest_name TEXT NOT NULL,
+    epic_username TEXT NOT NULL,
     queued_at INTEGER NOT NULL
   )
 `).run();
@@ -246,7 +256,7 @@ const deleteFortniteLinkStmt = db.prepare(`
   WHERE user_id = ?
 `);
 
-// Fortnite queue
+// Fortnite queue: Discord users
 const getFortniteQueueEntryStmt = db.prepare(`
   SELECT user_id, queued_at
   FROM fortnite_queue
@@ -267,9 +277,47 @@ const clearFortniteQueueStmt = db.prepare(`
   DELETE FROM fortnite_queue
 `);
 
-const listFortniteQueueStmt = db.prepare(`
+const listFortniteQueueDiscordStmt = db.prepare(`
   SELECT user_id, queued_at
   FROM fortnite_queue
+  ORDER BY queued_at ASC
+`);
+
+// Fortnite queue: Guests
+const getFortniteGuestQueueEntryByIdStmt = db.prepare(`
+  SELECT guest_id, guest_name, epic_username, queued_at
+  FROM fortnite_queue_guests
+  WHERE guest_id = ?
+`);
+
+const getFortniteGuestQueueEntryByNameStmt = db.prepare(`
+  SELECT guest_id, guest_name, epic_username, queued_at
+  FROM fortnite_queue_guests
+  WHERE lower(guest_name) = lower(?)
+`);
+
+const insertFortniteGuestQueueEntryStmt = db.prepare(`
+  INSERT OR REPLACE INTO fortnite_queue_guests (guest_id, guest_name, epic_username, queued_at)
+  VALUES (@guest_id, @guest_name, @epic_username, @queued_at)
+`);
+
+const deleteFortniteGuestQueueEntryByIdStmt = db.prepare(`
+  DELETE FROM fortnite_queue_guests
+  WHERE guest_id = ?
+`);
+
+const deleteFortniteGuestQueueEntryByNameStmt = db.prepare(`
+  DELETE FROM fortnite_queue_guests
+  WHERE lower(guest_name) = lower(?)
+`);
+
+const clearFortniteGuestQueueStmt = db.prepare(`
+  DELETE FROM fortnite_queue_guests
+`);
+
+const listFortniteQueueGuestsStmt = db.prepare(`
+  SELECT guest_id, guest_name, epic_username, queued_at
+  FROM fortnite_queue_guests
   ORDER BY queued_at ASC
 `);
 
@@ -597,11 +645,75 @@ function removeFromFortniteQueue(userId) {
 
 function clearFortniteQueue() {
   clearFortniteQueueStmt.run();
+  clearFortniteGuestQueueStmt.run();
   return [];
 }
 
+function makeGuestId(name, epicUsername) {
+  return `guest:${String(name || "").trim().toLowerCase()}::${String(epicUsername || "")
+    .trim()
+    .toLowerCase()}`;
+}
+
+function addGuestToFortniteQueue(guestName, epicUsername) {
+  const safeName = String(guestName || "").trim();
+  const safeEpic = String(epicUsername || "").trim();
+
+  if (!safeName || !safeEpic) {
+    throw new Error("Guest name and Epic username are required.");
+  }
+
+  const guestId = makeGuestId(safeName, safeEpic);
+
+  insertFortniteGuestQueueEntryStmt.run({
+    guest_id: guestId,
+    guest_name: safeName,
+    epic_username: safeEpic,
+    queued_at: Date.now()
+  });
+
+  return listFortniteQueue();
+}
+
+function getGuestFortniteQueueEntryById(guestId) {
+  return getFortniteGuestQueueEntryByIdStmt.get(guestId) || null;
+}
+
+function getGuestFortniteQueueEntryByName(guestName) {
+  if (!guestName) return null;
+  return getFortniteGuestQueueEntryByNameStmt.get(guestName) || null;
+}
+
+function removeGuestFromFortniteQueueById(guestId) {
+  deleteFortniteGuestQueueEntryByIdStmt.run(guestId);
+  return listFortniteQueue();
+}
+
+function removeGuestFromFortniteQueueByName(guestName) {
+  deleteFortniteGuestQueueEntryByNameStmt.run(guestName);
+  return listFortniteQueue();
+}
+
 function listFortniteQueue() {
-  return listFortniteQueueStmt.all();
+  const discordEntries = listFortniteQueueDiscordStmt.all().map(entry => ({
+    entry_type: "discord",
+    user_id: entry.user_id,
+    guest_id: null,
+    guest_name: null,
+    epic_username: null,
+    queued_at: entry.queued_at
+  }));
+
+  const guestEntries = listFortniteQueueGuestsStmt.all().map(entry => ({
+    entry_type: "guest",
+    user_id: null,
+    guest_id: entry.guest_id,
+    guest_name: entry.guest_name,
+    epic_username: entry.epic_username,
+    queued_at: entry.queued_at
+  }));
+
+  return [...discordEntries, ...guestEntries].sort((a, b) => a.queued_at - b.queued_at);
 }
 
 function getNextFortniteQueueUser() {
@@ -828,6 +940,11 @@ module.exports = {
   clearFortniteQueue,
   listFortniteQueue,
   getNextFortniteQueueUser,
+  addGuestToFortniteQueue,
+  getGuestFortniteQueueEntryById,
+  getGuestFortniteQueueEntryByName,
+  removeGuestFromFortniteQueueById,
+  removeGuestFromFortniteQueueByName,
 
   // fortnite queue state
   getFortniteQueueState,

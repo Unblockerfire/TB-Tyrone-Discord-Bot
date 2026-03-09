@@ -57,6 +57,10 @@ function clampGroupSize(value) {
   return Math.max(1, Math.min(10, Math.floor(num)));
 }
 
+function isGuestId(id) {
+  return typeof id === "string" && id.startsWith("guest:");
+}
+
 function readCurrentGroup(db) {
   const raw = db.getFortniteQueueState(STATE_CURRENT_GROUP, "[]");
 
@@ -82,16 +86,11 @@ function writeCurrentGroup(db, userIds) {
   if (ids.length === 0) {
     if (typeof db.deleteFortniteQueueState === "function") {
       db.deleteFortniteQueueState(STATE_CURRENT_GROUP);
-    } else {
-      db.setFortniteQueueState(STATE_CURRENT_GROUP, "[]");
-    }
-
-    if (typeof db.deleteFortniteQueueState === "function") {
       db.deleteFortniteQueueState(STATE_CURRENT_USER);
     } else {
+      db.setFortniteQueueState(STATE_CURRENT_GROUP, "[]");
       db.setFortniteQueueState(STATE_CURRENT_USER, "");
     }
-
     return;
   }
 
@@ -133,8 +132,47 @@ function getEpicUsername(db, userId) {
   return db.getFortniteLink(userId)?.epic_username || "Not linked";
 }
 
-function formatUserWithEpic(db, userId) {
-  return `<@${userId}> - \`${getEpicUsername(db, userId)}\``;
+function getEntryLabel(db, entry) {
+  if (!entry) return "Unknown";
+
+  if (entry.entry_type === "guest") {
+    return `${entry.guest_name} - \`${entry.epic_username}\``;
+  }
+
+  return `<@${entry.user_id}> - \`${getEpicUsername(db, entry.user_id)}\``;
+}
+
+function getEntryMention(entry) {
+  if (!entry) return "Unknown";
+  if (entry.entry_type === "guest") return entry.guest_name;
+  return `<@${entry.user_id}>`;
+}
+
+function getEntryById(db, id) {
+  if (!id) return null;
+
+  if (isGuestId(id)) {
+    const guest = db.getGuestFortniteQueueEntryById(id);
+    if (!guest) return null;
+
+    return {
+      entry_type: "guest",
+      user_id: null,
+      guest_id: guest.guest_id,
+      guest_name: guest.guest_name,
+      epic_username: guest.epic_username,
+      queued_at: guest.queued_at
+    };
+  }
+
+  return {
+    entry_type: "discord",
+    user_id: id,
+    guest_id: null,
+    guest_name: null,
+    epic_username: getEpicUsername(db, id),
+    queued_at: null
+  };
 }
 
 function buildVerifyPanelEmbed() {
@@ -163,17 +201,21 @@ function buildReadyPanelEmbed(queueOpen) {
 
 function buildQueueEmbed(db) {
   const queueOpen = asBool(db.getFortniteQueueState(STATE_QUEUE_OPEN, false));
-  const currentGroup = readCurrentGroup(db);
+  const currentGroupIds = readCurrentGroup(db);
   const currentStartedAt = Number(db.getFortniteQueueState(STATE_CURRENT_STARTED_AT, 0) || 0);
   const queue = db.listFortniteQueue();
   const groupSize = getConfiguredGroupSize(db);
 
-  const currentLine = currentGroup.length
-    ? currentGroup.map((userId) => formatUserWithEpic(db, userId)).join("\n")
+  const currentGroupEntries = currentGroupIds
+    .map((id) => getEntryById(db, id))
+    .filter(Boolean);
+
+  const currentLine = currentGroupEntries.length
+    ? currentGroupEntries.map((entry) => getEntryLabel(db, entry)).join("\n")
     : "Nobody currently up.";
 
   let timerLine = "No active timer.";
-  if (currentGroup.length > 0 && currentStartedAt > 0) {
+  if (currentGroupEntries.length > 0 && currentStartedAt > 0) {
     const endsAt = currentStartedAt + ROTATION_MS;
     timerLine =
       `Started: <t:${unixSeconds(currentStartedAt)}:t>\n` +
@@ -181,7 +223,7 @@ function buildQueueEmbed(db) {
   }
 
   const queueLines = queue.length
-    ? queue.map((entry, i) => `#${i + 1} ${formatUserWithEpic(db, entry.user_id)}`).join("\n")
+    ? queue.map((entry, i) => `#${i + 1} ${getEntryLabel(db, entry)}`).join("\n")
     : "Queue is empty.";
 
   return new EmbedBuilder()
@@ -345,7 +387,9 @@ async function announceInQueueChannel(guild, content) {
 }
 
 async function advanceQueue(guild, db, reasonText = "Queue advanced.", requestedCount = null) {
-  const previousGroup = readCurrentGroup(db);
+  const previousGroupIds = readCurrentGroup(db);
+  const previousGroupEntries = previousGroupIds.map((id) => getEntryById(db, id)).filter(Boolean);
+
   const queue = db.listFortniteQueue();
   const count = clampGroupSize(requestedCount ?? getConfiguredGroupSize(db));
   const nextEntries = queue.slice(0, count);
@@ -362,53 +406,62 @@ async function advanceQueue(guild, db, reasonText = "Queue advanced.", requested
     await ensureQueueDisplay(guild, db);
     await ensureReadyPanelDisplay(guild, db);
 
-    if (previousGroup.length > 0) {
+    if (previousGroupEntries.length > 0) {
       await announceInQueueChannel(
         guild,
-        `⏱️ ${previousGroup.map((userId) => `<@${userId}>`).join(", ")}'s turn is over. Nobody else is in queue right now.`
+        `⏱️ ${previousGroupEntries.map(getEntryMention).join(", ")}'s turn is over. Nobody else is in queue right now.`
       );
     }
 
     return {
-      previousUserIds: previousGroup,
-      nextUserIds: []
+      previousUserIds: previousGroupIds,
+      nextUserIds: [],
+      nextEntries: []
     };
   }
 
-  const nextUserIds = nextEntries.map((entry) => entry.user_id);
-  for (const userId of nextUserIds) {
-    db.removeFromFortniteQueue(userId);
+  const nextGroupIds = nextEntries.map((entry) =>
+    entry.entry_type === "guest" ? entry.guest_id : entry.user_id
+  );
+
+  for (const entry of nextEntries) {
+    if (entry.entry_type === "guest") {
+      db.removeGuestFromFortniteQueueById(entry.guest_id);
+    } else {
+      db.removeFromFortniteQueue(entry.user_id);
+    }
   }
 
-  setConfiguredGroupSize(db, nextUserIds.length);
-  writeCurrentGroup(db, nextUserIds);
+  setConfiguredGroupSize(db, nextEntries.length);
+  writeCurrentGroup(db, nextGroupIds);
   db.setFortniteQueueState(STATE_CURRENT_STARTED_AT, Date.now());
 
   await ensureQueueDisplay(guild, db);
   await ensureReadyPanelDisplay(guild, db);
 
-  const previousMentions = previousGroup.map((userId) => `<@${userId}>`).join(", ");
-  const nextMentions = nextUserIds.map((userId) => `<@${userId}>`).join(", ");
+  const previousMentions = previousGroupEntries.map(getEntryMention).join(", ");
+  const nextMentions = nextEntries.map(getEntryMention).join(", ");
 
-  if (previousGroup.length > 0) {
+  if (previousGroupEntries.length > 0) {
     await announceInQueueChannel(
       guild,
-      `⏱️ ${previousMentions}'s turn is over.\n🎯 ${reasonText}\n✅ ${nextMentions} ${nextUserIds.length === 1 ? "is" : "are"} now up for ${Math.floor(
+      `⏱️ ${previousMentions}'s turn is over.\n🎯 ${reasonText}\n✅ ${nextMentions} ${nextEntries.length === 1 ? "is" : "are"} now up for ${Math.floor(
         ROTATION_MS / 60000
       )} minutes.`
     );
   } else {
     await announceInQueueChannel(
       guild,
-      `✅ ${nextMentions} ${nextUserIds.length === 1 ? "is" : "are"} now up for ${Math.floor(
+      `✅ ${nextMentions} ${nextEntries.length === 1 ? "is" : "are"} now up for ${Math.floor(
         ROTATION_MS / 60000
       )} minutes.`
     );
   }
 
   return {
-    previousUserIds: previousGroup,
-    nextUserIds
+    previousUserIds: previousGroupIds,
+    nextUserIds: nextGroupIds,
+    nextEntries
   };
 }
 
@@ -646,7 +699,9 @@ async function handleInteraction(interaction, { db }) {
     "fort-queue-close",
     "fort-queue-status",
     "fort-queue-next",
-    "fort-queue-remove"
+    "fort-queue-remove",
+    "fort-queue-add-guest",
+    "fort-queue-remove-guest"
   ].includes(cmd);
 
   if (!isOurs) return false;
@@ -790,12 +845,18 @@ async function handleInteraction(interaction, { db }) {
 
     setConfiguredGroupSize(db, actualCount);
 
-    const result = await advanceQueue(guild, db, `Staff advanced the queue with party size ${actualCount}.`, actualCount);
+    const result = await advanceQueue(
+      guild,
+      db,
+      `Staff advanced the queue with party size ${actualCount}.`,
+      actualCount
+    );
+
     await ensureReadyPanelDisplay(guild, db);
 
     await safeReply(interaction, {
-      content: result.nextUserIds.length
-        ? `${result.nextUserIds.map((userId) => `<@${userId}>`).join(", ")} ${result.nextUserIds.length === 1 ? "is" : "are"} now up ✅`
+      content: result.nextEntries.length
+        ? `${result.nextEntries.map(getEntryMention).join(", ")} ${result.nextEntries.length === 1 ? "is" : "are"} now up ✅`
         : "Queue advanced, but nobody is waiting right now.",
       ephemeral: true
     });
@@ -847,6 +908,91 @@ async function handleInteraction(interaction, { db }) {
       content: changed
         ? `${user} was removed from the queue/current slot.`
         : `${user} was not in the queue.`,
+      ephemeral: true
+    });
+    return true;
+  }
+
+  if (cmd === "fort-queue-add-guest") {
+    if (!isStaff(member)) {
+      await safeReply(interaction, { content: "No permission.", ephemeral: true });
+      return true;
+    }
+
+    const name = (interaction.options.getString("name") || "").trim();
+    const epic = (interaction.options.getString("epic") || "").trim();
+
+    if (!name || !epic) {
+      await safeReply(interaction, {
+        content: "Guest name and Epic username are required.",
+        ephemeral: true
+      });
+      return true;
+    }
+
+    db.addGuestToFortniteQueue(name, epic);
+    await ensureQueueDisplay(guild, db);
+    await ensureReadyPanelDisplay(guild, db);
+
+    await safeReply(interaction, {
+      content: `Added guest **${name}** with Epic **${epic}** to the queue ✅`,
+      ephemeral: true
+    });
+    return true;
+  }
+
+  if (cmd === "fort-queue-remove-guest") {
+    if (!isStaff(member)) {
+      await safeReply(interaction, { content: "No permission.", ephemeral: true });
+      return true;
+    }
+
+    const name = (interaction.options.getString("name") || "").trim();
+    if (!name) {
+      await safeReply(interaction, {
+        content: "Please enter a guest name.",
+        ephemeral: true
+      });
+      return true;
+    }
+
+    let changed = false;
+
+    const queuedGuest = db.getGuestFortniteQueueEntryByName(name);
+    if (queuedGuest) {
+      db.removeGuestFromFortniteQueueByName(name);
+      changed = true;
+    }
+
+    const currentGroup = readCurrentGroup(db);
+    const guestInCurrent = currentGroup.find((id) => {
+      if (!isGuestId(id)) return false;
+      const guest = db.getGuestFortniteQueueEntryById(id);
+      return guest && guest.guest_name.toLowerCase() === name.toLowerCase();
+    });
+
+    if (guestInCurrent) {
+      const nextGroup = currentGroup.filter((id) => id !== guestInCurrent);
+      writeCurrentGroup(db, nextGroup);
+
+      if (nextGroup.length === 0) {
+        if (typeof db.deleteFortniteQueueState === "function") {
+          db.deleteFortniteQueueState(STATE_CURRENT_STARTED_AT);
+        } else {
+          db.setFortniteQueueState(STATE_CURRENT_STARTED_AT, "");
+        }
+      }
+
+      changed = true;
+    }
+
+    await ensureQueueDisplay(guild, db);
+    await ensureReadyPanelDisplay(guild, db);
+
+    await safeReply(interaction, {
+      content: changed
+        ? `Guest **${name}** was removed from the queue/current slot.`
+        : `Guest **${name}** was not found in the queue.`,
       ephemeral: true
     });
     return true;
