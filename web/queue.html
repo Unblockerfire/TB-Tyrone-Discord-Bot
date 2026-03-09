@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Fortnite Queue</title>
+
+<style>
+
+body{
+background: transparent;
+font-family: Arial;
+color:white;
+}
+
+.title{
+font-size:36px;
+font-weight:bold;
+margin-bottom:15px;
+}
+
+.item{
+font-size:28px;
+margin:4px 0;
+}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="title">🎮 Fortnite Queue</div>
+
+<div id="queue">
+Loading...
+</div>
+
+<script>
+
+async function loadQueue(){
+
+const res = await fetch("/api/queue");
+const data = await res.json();
+
+const div = document.getElementById("queue");
+
+div.innerHTML="";
+
+if(data.length === 0){
+div.innerHTML="Queue Empty";
+return;
+}
+
+data.forEach((user,i)=>{
+const el=document.createElement("div");
+el.className="item";
+el.innerText=`${i+1}. ${user}`;
+div.appendChild(el);
+});
+
+}
+
+setInterval(loadQueue,3000);
+loadQueue();
+
+</script>
+
+</body>
+</html>

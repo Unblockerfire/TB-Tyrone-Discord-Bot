@@ -9,6 +9,7 @@ const {
 } = require("discord.js");
 
 // Local modules
+const { startQueueServer } = require("./queueServer");
 const db = require("./db");
 const moderation = require("./commands/moderation");
 const songs = require("./commands/songs");
@@ -19,6 +20,8 @@ const notifyRoles = require("./commands/notifyRoles");
 const tickets = require("./commands/tickets");
 const roleSelect = require("./commands/roleSelect");
 const fortniteQueue = require("./commands/fortniteQueue");
+
+startQueueServer(db);
 
 // ---------- CLIENT SETUP ----------
 const client = new Client({
