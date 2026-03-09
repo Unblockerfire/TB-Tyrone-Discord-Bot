@@ -28,7 +28,7 @@ res.json(users);
 
 });
 
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 app.listen(PORT,()=>{
 console.log("Queue overlay running on http://localhost:"+PORT+"/queue.html");
