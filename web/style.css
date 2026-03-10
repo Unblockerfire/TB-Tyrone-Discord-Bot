@@ -1,0 +1,82 @@
+
+
+/* General page styling */
+body {
+  margin: 0;
+  padding: 0;
+  font-family: Arial, Helvetica, sans-serif;
+  background: #0f172a;
+  color: #ffffff;
+}
+
+/* Center container */
+.container {
+  max-width: 900px;
+  margin: 40px auto;
+  padding: 20px;
+}
+
+/* Cards used for rules / queue */
+.card {
+  background: #1e293b;
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 20px;
+  box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+}
+
+/* Headings */
+h1, h2 {
+  margin-top: 0;
+}
+
+/* Buttons */
+button {
+  background: #22c55e;
+  border: none;
+  border-radius: 8px;
+  padding: 12px 18px;
+  color: white;
+  font-size: 16px;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #16a34a;
+}
+
+button:disabled {
+  background: #64748b;
+  cursor: not-allowed;
+}
+
+/* Input fields */
+input {
+  width: 100%;
+  padding: 10px;
+  margin-top: 8px;
+  margin-bottom: 12px;
+  border-radius: 6px;
+  border: 1px solid #334155;
+  background: #0f172a;
+  color: white;
+}
+
+/* Queue list */
+.queue-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.queue-list li {
+  padding: 8px 0;
+  border-bottom: 1px solid #334155;
+}
+
+/* Highlight currently playing */
+.current-player {
+  font-size: 20px;
+  font-weight: bold;
+  color: #22c55e;
+}

@@ -1,0 +1,273 @@
+
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fortnite Queue Join</title>
+  <link rel="stylesheet" href="/style.css" />
+  <style>
+    .muted {
+      color: #cbd5e1;
+      font-size: 14px;
+    }
+
+    .rules-list {
+      padding-left: 18px;
+      line-height: 1.55;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+
+    .checkbox-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      margin: 14px 0 18px;
+    }
+
+    .checkbox-row input {
+      width: auto;
+      margin: 3px 0 0;
+    }
+
+    .status-box {
+      margin-top: 12px;
+      padding: 12px 14px;
+      border-radius: 8px;
+      background: #0f172a;
+      border: 1px solid #334155;
+      white-space: pre-line;
+    }
+
+    .status-success {
+      border-color: #166534;
+      color: #bbf7d0;
+    }
+
+    .status-error {
+      border-color: #7f1d1d;
+      color: #fecaca;
+    }
+
+    .small-button {
+      background: #334155;
+      margin-left: 8px;
+    }
+
+    .small-button:hover {
+      background: #475569;
+    }
+
+    .section-title {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+
+    @media (max-width: 700px) {
+      .row {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <h1>🎮 Join the Fortnite Queue</h1>
+      <p class="muted">
+        Read the rules, agree to them, then enter your info and press <strong>Ready Up</strong>.
+      </p>
+    </div>
+
+    <div class="card">
+      <h2>Rules</h2>
+      <ul class="rules-list">
+        <li>Do not invite other people to the party.</li>
+        <li>Do not change the game mode unless told to.</li>
+        <li>Do not grief, troll, or intentionally ruin games.</li>
+        <li>Do not say hateful, derogatory, or inappropriate things.</li>
+        <li>Join when it is your turn.</li>
+        <li>Leave when your turn is over.</li>
+        <li>Breaking the rules can get you removed or banned from the queue.</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>Ready Up</h2>
+
+      <div class="row">
+        <div>
+          <label for="displayName">Display Name</label>
+          <input id="displayName" type="text" maxlength="32" placeholder="How should we show you in queue?" />
+          <div class="muted">This can be your TikTok name, first name, or nickname.</div>
+        </div>
+
+        <div>
+          <label for="epicUsername">Fortnite Username</label>
+          <input id="epicUsername" type="text" maxlength="32" placeholder="Your actual Epic / Fortnite username" />
+          <div class="muted">Use your real Fortnite name, not a display joke name.</div>
+        </div>
+      </div>
+
+      <div class="checkbox-row">
+        <input id="rulesAccepted" type="checkbox" />
+        <label for="rulesAccepted">
+          I have read the rules above and agree to follow them while playing.
+        </label>
+      </div>
+
+      <div>
+        <button id="readyUpButton" type="button">Ready Up</button>
+        <button id="clearButton" class="small-button" type="button">Clear</button>
+      </div>
+
+      <div id="statusBox" class="status-box muted" style="display:none;"></div>
+    </div>
+
+    <div class="card">
+      <div class="section-title">
+        <h2 style="margin:0;">Live Queue</h2>
+        <button id="refreshButton" class="small-button" type="button">Refresh</button>
+      </div>
+
+      <div id="queueSummary" class="muted" style="margin-top:10px;">Loading queue...</div>
+      <ul id="queueList" class="queue-list" style="margin-top:12px;"></ul>
+    </div>
+  </div>
+
+  <script>
+    const displayNameInput = document.getElementById("displayName");
+    const epicUsernameInput = document.getElementById("epicUsername");
+    const rulesAcceptedInput = document.getElementById("rulesAccepted");
+    const readyUpButton = document.getElementById("readyUpButton");
+    const clearButton = document.getElementById("clearButton");
+    const refreshButton = document.getElementById("refreshButton");
+    const statusBox = document.getElementById("statusBox");
+    const queueSummary = document.getElementById("queueSummary");
+    const queueList = document.getElementById("queueList");
+
+    function showStatus(message, type = "info") {
+      statusBox.style.display = "block";
+      statusBox.textContent = message;
+      statusBox.className = "status-box";
+
+      if (type === "success") {
+        statusBox.classList.add("status-success");
+      } else if (type === "error") {
+        statusBox.classList.add("status-error");
+      } else {
+        statusBox.classList.add("muted");
+      }
+    }
+
+    function clearForm() {
+      displayNameInput.value = "";
+      epicUsernameInput.value = "";
+      rulesAcceptedInput.checked = false;
+      statusBox.style.display = "none";
+      statusBox.textContent = "";
+    }
+
+    async function loadQueue() {
+      try {
+        const res = await fetch("/api/queue", { cache: "no-store" });
+        if (!res.ok) throw new Error("Failed to load queue.");
+
+        const data = await res.json();
+        const items = Array.isArray(data)
+          ? data
+          : Array.isArray(data.queue)
+            ? data.queue
+            : [];
+
+        queueList.innerHTML = "";
+
+        if (!items.length) {
+          queueSummary.textContent = "Queue is empty right now.";
+          return;
+        }
+
+        queueSummary.textContent = `${items.length} player${items.length === 1 ? "" : "s"} in queue.`;
+
+        items.forEach((item, index) => {
+          const li = document.createElement("li");
+          li.textContent = `${index + 1}. ${typeof item === "string" ? item : JSON.stringify(item)}`;
+          queueList.appendChild(li);
+        });
+      } catch (err) {
+        queueSummary.textContent = "Could not load queue right now.";
+        queueList.innerHTML = "";
+      }
+    }
+
+    async function readyUp() {
+      const displayName = displayNameInput.value.trim();
+      const epicUsername = epicUsernameInput.value.trim();
+      const rulesAccepted = rulesAcceptedInput.checked;
+
+      if (!displayName) {
+        showStatus("Please enter a display name.", "error");
+        return;
+      }
+
+      if (!epicUsername) {
+        showStatus("Please enter your Fortnite username.", "error");
+        return;
+      }
+
+      if (!rulesAccepted) {
+        showStatus("You need to agree to the rules before joining the queue.", "error");
+        return;
+      }
+
+      readyUpButton.disabled = true;
+
+      try {
+        const res = await fetch("/api/queue/join", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            displayName,
+            epicUsername,
+            rulesAccepted
+          })
+        });
+
+        const data = await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+          throw new Error(data.error || "Failed to join queue.");
+        }
+
+        showStatus(
+          data.message || "You were added to the queue successfully.",
+          "success"
+        );
+
+        await loadQueue();
+      } catch (err) {
+        showStatus(err.message || "Something went wrong while joining queue.", "error");
+      } finally {
+        readyUpButton.disabled = false;
+      }
+    }
+
+    readyUpButton.addEventListener("click", readyUp);
+    clearButton.addEventListener("click", clearForm);
+    refreshButton.addEventListener("click", loadQueue);
+
+    setInterval(loadQueue, 5000);
+    loadQueue();
+  </script>
+</body>
+</html>
