@@ -1,5 +1,3 @@
-
-
 /* General page styling */
 body {
   margin: 0;
@@ -11,33 +9,44 @@ body {
 
 /* Center container */
 .container {
-  max-width: 900px;
-  margin: 40px auto;
-  padding: 20px;
+  max-width: 980px;
+  margin: 48px auto;
+  padding: 24px;
 }
 
 /* Cards used for rules / queue */
 .card {
   background: #1e293b;
-  border-radius: 12px;
-  padding: 20px;
-  margin-bottom: 20px;
+  border-radius: 16px;
+  padding: 28px 32px;
+  margin-bottom: 28px;
   box-shadow: 0 4px 15px rgba(0,0,0,0.3);
 }
 
 /* Headings */
 h1, h2 {
   margin-top: 0;
+  margin-bottom: 18px;
+  line-height: 1.15;
+}
+
+h1 {
+  font-size: 52px;
+}
+
+h2 {
+  font-size: 34px;
 }
 
 /* Buttons */
 button {
   background: #22c55e;
   border: none;
-  border-radius: 8px;
-  padding: 12px 18px;
+  border-radius: 10px;
+  padding: 16px 28px;
   color: white;
-  font-size: 16px;
+  font-size: 18px;
+  font-weight: 600;
   cursor: pointer;
 }
 
@@ -53,25 +62,28 @@ button:disabled {
 /* Input fields */
 input {
   width: 100%;
-  padding: 10px;
-  margin-top: 8px;
-  margin-bottom: 12px;
-  border-radius: 6px;
+  padding: 16px 18px;
+  margin-top: 10px;
+  margin-bottom: 14px;
+  border-radius: 10px;
   border: 1px solid #334155;
   background: #0f172a;
   color: white;
+  font-size: 18px;
+  box-sizing: border-box;
 }
 
 /* Queue list */
 .queue-list {
   list-style: none;
   padding: 0;
-  margin: 0;
+  margin: 8px 0 0;
 }
 
 .queue-list li {
-  padding: 8px 0;
+  padding: 14px 0;
   border-bottom: 1px solid #334155;
+  font-size: 20px;
 }
 
 /* Highlight currently playing */
@@ -79,4 +91,65 @@ input {
   font-size: 20px;
   font-weight: bold;
   color: #22c55e;
+}
+
+label {
+  display: block;
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.muted {
+  color: #cbd5e1;
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.intro-text,
+.rules-intro {
+  margin-bottom: 18px;
+}
+
+.checkbox-row {
+  margin: 22px 0 26px;
+}
+
+.checkbox-row label {
+  font-size: 17px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+.checkbox-row input {
+  transform: scale(1.3);
+  margin-top: 4px;
+}
+
+.status-box {
+  margin-top: 18px;
+}
+
+@media (max-width: 700px) {
+  .container {
+    padding: 16px;
+    margin: 24px auto;
+  }
+
+  .card {
+    padding: 22px 20px;
+  }
+
+  h1 {
+    font-size: 40px;
+  }
+
+  h2 {
+    font-size: 28px;
+  }
+
+  button {
+    width: 100%;
+    margin-bottom: 12px;
+  }
 }
