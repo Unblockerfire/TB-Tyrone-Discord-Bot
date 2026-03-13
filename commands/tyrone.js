@@ -9,6 +9,7 @@ const fetch = (...args) =>
 const TYRONE_CHANNEL_ID = process.env.TYRONE_CHANNEL_ID || null;
 const TYRONE_ALLOWED_ROLE_ID = process.env.TYRONE_ALLOWED_ROLE_ID || null;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || null;
+const OWNER_USER_ID = process.env.OWNER_USER_ID || "796968805196627978";
 
 // (Optional) where /report-issue should post
 const TYRONE_ISSUES_CHANNEL_ID = process.env.TYRONE_ISSUES_CHANNEL_ID || null;
@@ -459,6 +460,7 @@ async function handleInteraction(interaction, { client, db }) {
 // ---------- MESSAGE HANDLER ----------
 async function handleMessage(message, { db }) {
   if (message.author.bot) return;
+  if (message.author.id === OWNER_USER_ID) return;
 
   const raw = message.content || "";
   const content = raw.trim();
