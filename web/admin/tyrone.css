@@ -228,11 +228,26 @@ h3 {
   background: rgba(255, 255, 255, 0.68);
 }
 
+.overview-card {
+  color: var(--ink);
+  text-align: left;
+}
+
+button.overview-card {
+  display: block;
+  width: 100%;
+  color: var(--ink);
+  text-align: left;
+  background: rgba(255, 255, 255, 0.68);
+  border: 1px solid var(--line);
+}
+
 .overview-card strong,
 .memory-card strong {
   display: block;
   margin-top: 8px;
   font-size: 24px;
+  color: var(--ink);
 }
 
 .clickable-card {
