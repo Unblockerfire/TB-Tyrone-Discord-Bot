@@ -263,6 +263,21 @@
     </main>
   </div>
 
+  <div id="overviewWindow" class="detail-window hidden" aria-hidden="true">
+    <div id="overviewWindowBackdrop" class="detail-window-backdrop"></div>
+    <section class="detail-window-panel" role="dialog" aria-modal="true" aria-labelledby="overviewWindowTitle">
+      <div class="panel-header">
+        <div>
+          <p class="eyebrow">Overview Detail</p>
+          <h2 id="overviewWindowTitle">Loading...</h2>
+        </div>
+        <button id="closeOverviewWindowButton" type="button" class="ghost-button">Close</button>
+      </div>
+      <div id="overviewWindowSummary" class="detail-summary">Loading summary...</div>
+      <div id="overviewWindowCards" class="detail-cards bounded-feed"></div>
+    </section>
+  </div>
+
   <script src="/admin/tyrone/assets/tyrone.js"></script>
 </body>
 </html>

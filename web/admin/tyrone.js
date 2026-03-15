@@ -21,9 +21,16 @@ const responsesList = document.getElementById("responsesList");
 const memoryGrid = document.getElementById("memoryGrid");
 const reportsList = document.getElementById("reportsList");
 const pageNotice = document.getElementById("pageNotice");
+const overviewWindow = document.getElementById("overviewWindow");
+const overviewWindowBackdrop = document.getElementById("overviewWindowBackdrop");
+const overviewWindowTitle = document.getElementById("overviewWindowTitle");
+const overviewWindowSummary = document.getElementById("overviewWindowSummary");
+const overviewWindowCards = document.getElementById("overviewWindowCards");
+const closeOverviewWindowButton = document.getElementById("closeOverviewWindowButton");
 
 let currentState = null;
 let localChatHistory = [];
+const overviewSummaryCache = new Map();
 
 function setButtonBusy(button, busy, busyText = null) {
   if (!button) return;
@@ -139,23 +146,201 @@ function collectSettings() {
   return data;
 }
 
+function buildOverviewModalData(key) {
+  if (!currentState) {
+    return {
+      title: "Overview",
+      summaryInput: "Dashboard state is still loading.",
+      cards: []
+    };
+  }
+
+  const settings = currentState.settings || {};
+  const cardMap = {
+    enabled: {
+      title: "Enabled",
+      summaryInput: `Tyrone enabled: ${settings.enabled ? "yes" : "no"}.`,
+      cards: [
+        { title: "Enabled", body: settings.enabled ? "Tyrone is currently active and able to answer." : "Tyrone is currently disabled." },
+        { title: "Direct command", body: settings.direct_command_enabled ? "The !tyrone command path is enabled." : "The !tyrone command path is disabled." },
+        { title: "Mention replies", body: settings.mention_reply_enabled ? "Mention replies are enabled." : "Mention replies are disabled." },
+        { title: "Soft intercept", body: settings.soft_intercept_enabled ? "Soft intercept nags are enabled." : "Soft intercept nags are disabled." }
+      ]
+    },
+    openai: {
+      title: "OpenAI",
+      summaryInput: JSON.stringify({
+        configured: currentState.overview.openai_configured,
+        model: settings.openai_model,
+        cache_rows: currentState.cache.count,
+        response_logs: currentState.response_logs.slice(0, 5).map(row => ({ path: row.path, created_at: row.created_at }))
+      }, null, 2),
+      cards: [
+        { title: "Configured", body: currentState.overview.openai_configured ? "OpenAI is configured." : "OpenAI is not configured." },
+        { title: "Model", body: settings.openai_model || "No model set." },
+        { title: "Recent AI answers", body: currentState.response_logs.filter(row => row.path === "ai").slice(0, 5).map(row => row.prompt_text).join("\n\n") || "No recent AI answers logged." }
+      ]
+    },
+    faq: {
+      title: "FAQ Entries",
+      summaryInput: JSON.stringify(currentState.faqs.slice(0, 12), null, 2),
+      cards: currentState.faqs.map(faq => ({
+        title: faq.label || `FAQ ${faq.id}`,
+        body: `Patterns:\n${faq.pattern}\n\nAnswer:\n${faq.answer}`
+      }))
+    },
+    corrections: {
+      title: "Corrections",
+      summaryInput: JSON.stringify(currentState.corrections.slice(0, 12), null, 2),
+      cards: currentState.corrections.map(correction => ({
+        title: correction.label || `Correction ${correction.id}`,
+        body: `Trigger:\n${correction.trigger_text}\n\nResponse:\n${correction.response_text}`
+      }))
+    },
+    reports: {
+      title: "Reports Pending",
+      summaryInput: JSON.stringify(currentState.reports.filter(report => report.status === "pending" || report.status === "pending_review"), null, 2),
+      cards: currentState.reports.map(report => ({
+        title: `${report.report_type || "report"} · ${report.status || "unknown"}`,
+        body: `Question:\n${report.question_text || "(missing)"}\n\nReply:\n${report.response_text || "(missing)"}\n\nGuess:\n${report.tyrone_guess || "(none)"}`
+      }))
+    },
+    cache: {
+      title: "Cache Rows",
+      summaryInput: JSON.stringify(currentState.cache.entries || [], null, 2),
+      cards: (currentState.cache.entries || []).map(entry => ({
+        title: entry.question_key,
+        body: `Uses: ${entry.use_count}\n\n${entry.answer}`
+      }))
+    },
+    model: {
+      title: "Model",
+      summaryInput: `Current model: ${settings.openai_model || "none"}.`,
+      cards: [
+        { title: "Model", body: settings.openai_model || "No model set." },
+        { title: "System prompt", body: settings.system_prompt || "(empty)" },
+        { title: "Outro template", body: settings.outro_template || "(empty)" }
+      ]
+    },
+    channel_gate: {
+      title: "Channel Gate",
+      summaryInput: JSON.stringify({
+        channel_id: settings.channel_id,
+        seen_messages: currentState.seen_messages.slice(0, 10).map(row => ({
+          channel_id: row.channel_id,
+          outcome: row.outcome,
+          content: row.content
+        }))
+      }, null, 2),
+      cards: [
+        { title: "Configured channel", body: settings.channel_id || "All channels are currently allowed." },
+        ...currentState.seen_messages.slice(0, 12).map(row => ({
+          title: `${row.outcome || "seen"} · ${row.channel_id || "unknown channel"}`,
+          body: row.content || "(empty)"
+        }))
+      ]
+    },
+    role_gate: {
+      title: "Role Gate",
+      summaryInput: JSON.stringify({
+        allowed_role_id: settings.allowed_role_id,
+        recent_seen: currentState.seen_messages.slice(0, 10).map(row => ({ outcome: row.outcome, user_id: row.user_id }))
+      }, null, 2),
+      cards: [
+        { title: "Allowed role", body: settings.allowed_role_id || "No role gate is enforced." },
+        ...currentState.seen_messages.slice(0, 12).map(row => ({
+          title: `${row.username || row.user_id}`,
+          body: `Outcome: ${row.outcome || "seen"}\nChannel: ${row.channel_id || "unknown"}`
+        }))
+      ]
+    },
+    issues_channel: {
+      title: "Issues Channel",
+      summaryInput: JSON.stringify({
+        issues_channel_id: settings.issues_channel_id,
+        recent_events: currentState.events.filter(event => String(event.kind || "").includes("report")).slice(0, 10)
+      }, null, 2),
+      cards: [
+        { title: "Configured channel", body: settings.issues_channel_id || "No issues channel is set." },
+        ...currentState.events.filter(event => String(event.kind || "").includes("report")).slice(0, 10).map(event => ({
+          title: event.kind,
+          body: JSON.stringify(event.detail || {}, null, 2)
+        }))
+      ]
+    }
+  };
+
+  return cardMap[key] || {
+    title: "Overview",
+    summaryInput: JSON.stringify(currentState, null, 2),
+    cards: []
+  };
+}
+
+async function openOverviewWindow(key) {
+  const detail = buildOverviewModalData(key);
+  overviewWindowTitle.textContent = detail.title;
+  overviewWindowSummary.textContent = "Writing summary...";
+  overviewWindowCards.innerHTML = detail.cards.length
+    ? detail.cards
+        .map(card => `
+          <article class="feed-card">
+            <div class="feed-title">${escapeHtml(card.title)}</div>
+            <div class="feed-block pre">${escapeHtml(card.body)}</div>
+          </article>
+        `)
+        .join("")
+    : emptyState("No detailed items yet.");
+
+  overviewWindow.classList.remove("hidden");
+  overviewWindow.setAttribute("aria-hidden", "false");
+
+  const cacheKey = `${key}:${detail.summaryInput}`;
+  if (overviewSummaryCache.has(cacheKey)) {
+    overviewWindowSummary.textContent = overviewSummaryCache.get(cacheKey);
+    return;
+  }
+
+  try {
+    const data = await api("/admin/tyrone/api/rewrite", {
+      method: "POST",
+      body: {
+        purpose: `Write a short admin summary for the Tyrone dashboard section "${detail.title}". Focus on what matters and keep it concise.`,
+        text: detail.summaryInput
+      }
+    });
+    const summary = data.rewritten || "No summary available.";
+    overviewSummaryCache.set(cacheKey, summary);
+    if (overviewWindowTitle.textContent === detail.title) {
+      overviewWindowSummary.textContent = summary;
+    }
+  } catch (err) {
+    overviewWindowSummary.textContent = "Summary failed to load. The detail cards below still show the live data.";
+  }
+}
+
+function closeOverviewWindow() {
+  overviewWindow.classList.add("hidden");
+  overviewWindow.setAttribute("aria-hidden", "true");
+}
+
 function renderOverview(state) {
   const cards = [
-    ["Enabled", state.settings.enabled ? "Yes" : "No", "responseSection"],
-    ["OpenAI", state.overview.openai_configured ? "Configured" : "Missing", "responseSection"],
-    ["FAQ entries", String(state.overview.faq_count), "faqSection"],
-    ["Corrections", String(state.overview.corrections_count), "correctionsSection"],
-    ["Reports pending", String(state.overview.reports_pending), "reportsSection"],
-    ["Cache rows", String(state.cache.count), "cacheSection"],
-    ["Model", state.settings.openai_model || "None", "responseSection"],
-    ["Channel gate", state.settings.channel_id || "All channels", "routingSection"],
-    ["Role gate", state.settings.allowed_role_id || "No role gate", "routingSection"],
-    ["Issues channel", state.settings.issues_channel_id || "Not set", "routingSection"]
+    ["Enabled", state.settings.enabled ? "Yes" : "No", "enabled"],
+    ["OpenAI", state.overview.openai_configured ? "Configured" : "Missing", "openai"],
+    ["FAQ entries", String(state.overview.faq_count), "faq"],
+    ["Corrections", String(state.overview.corrections_count), "corrections"],
+    ["Reports pending", String(state.overview.reports_pending), "reports"],
+    ["Cache rows", String(state.cache.count), "cache"],
+    ["Model", state.settings.openai_model || "None", "model"],
+    ["Channel gate", state.settings.channel_id || "All channels", "channel_gate"],
+    ["Role gate", state.settings.allowed_role_id || "No role gate", "role_gate"],
+    ["Issues channel", state.settings.issues_channel_id || "Not set", "issues_channel"]
   ];
 
   overviewGrid.innerHTML = cards
-    .map(([label, value, target]) => `
-      <button type="button" class="overview-card clickable-card" data-target="${target}">
+    .map(([label, value, overviewKey]) => `
+      <button type="button" class="overview-card clickable-card" data-overview-key="${overviewKey}">
         <div class="muted">${escapeHtml(label)}</div>
         <strong>${escapeHtml(value)}</strong>
       </button>
@@ -721,6 +906,12 @@ chatForm.addEventListener("submit", async event => {
 });
 
 document.addEventListener("click", async event => {
+  const overviewButton = event.target.closest("[data-overview-key]");
+  if (overviewButton && overviewButton.dataset.overviewKey) {
+    await openOverviewWindow(overviewButton.dataset.overviewKey);
+    return;
+  }
+
   const targetButton = event.target.closest("[data-target]");
   if (targetButton && targetButton.dataset.target) {
     const target = document.getElementById(targetButton.dataset.target);
@@ -838,6 +1029,14 @@ document.addEventListener("click", async event => {
     } finally {
       setButtonBusy(reportAction, false);
     }
+  }
+});
+
+closeOverviewWindowButton.addEventListener("click", closeOverviewWindow);
+overviewWindowBackdrop.addEventListener("click", closeOverviewWindow);
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape" && !overviewWindow.classList.contains("hidden")) {
+    closeOverviewWindow();
   }
 });
 
