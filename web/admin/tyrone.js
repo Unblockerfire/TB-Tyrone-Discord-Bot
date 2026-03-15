@@ -68,6 +68,18 @@ function emptyState(message) {
   return `<div class="empty">${escapeHtml(message)}</div>`;
 }
 
+function cleanSummaryText(text) {
+  return String(text || "")
+    .replace(/```[\s\S]*?```/g, match => match.replace(/```/g, ""))
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/\*([^*]+)\*/g, "$1")
+    .replace(/^#{1,6}\s*/gm, "")
+    .replace(/^\s*[-*]\s+/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 async function api(path, options = {}) {
   const res = await fetch(path, {
     method: options.method || "GET",
@@ -297,7 +309,7 @@ async function openOverviewWindow(key) {
 
   const cacheKey = `${key}:${detail.summaryInput}`;
   if (overviewSummaryCache.has(cacheKey)) {
-    overviewWindowSummary.textContent = overviewSummaryCache.get(cacheKey);
+    overviewWindowSummary.textContent = cleanSummaryText(overviewSummaryCache.get(cacheKey));
     return;
   }
 
@@ -309,7 +321,7 @@ async function openOverviewWindow(key) {
         text: detail.summaryInput
       }
     });
-    const summary = data.rewritten || "No summary available.";
+    const summary = cleanSummaryText(data.rewritten || "No summary available.");
     overviewSummaryCache.set(cacheKey, summary);
     if (overviewWindowTitle.textContent === detail.title) {
       overviewWindowSummary.textContent = summary;
