@@ -1191,10 +1191,145 @@ function startTicketJanitor(client) {
   }, intervalMs);
 }
 
+async function createTyroneFeedbackTicket({ guild, reporter, summary, responseLog, report }) {
+  const missing = missingConfig();
+  if (missing.length) {
+    return {
+      ok: false,
+      error: "Tyrone ticket system is missing config in .env: " + missing.join(", ")
+    };
+  }
+
+  if (!guild) {
+    return { ok: false, error: "Guild is required to create a feedback ticket." };
+  }
+
+  const opener = reporter;
+  const safeBase = `ticket-tyrone-${opener?.username || "feedback"}`
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "")
+    .slice(0, 90);
+  const channelName = safeBase || `ticket-tyrone-${opener?.id || Date.now()}`;
+
+  const overwrites = [
+    {
+      id: guild.roles.everyone.id,
+      deny: [PermissionsBitField.Flags.ViewChannel]
+    }
+  ];
+
+  if (opener?.id) {
+    overwrites.push({
+      id: opener.id,
+      allow: [
+        PermissionsBitField.Flags.ViewChannel,
+        PermissionsBitField.Flags.SendMessages,
+        PermissionsBitField.Flags.ReadMessageHistory
+      ]
+    });
+  }
+
+  for (const rid of TICKET_CLAIM_ROLE_IDS) {
+    overwrites.push({
+      id: rid,
+      allow: [
+        PermissionsBitField.Flags.ViewChannel,
+        PermissionsBitField.Flags.SendMessages,
+        PermissionsBitField.Flags.ReadMessageHistory
+      ]
+    });
+  }
+
+  const ticketChannel = await guild.channels.create({
+    name: channelName,
+    type: ChannelType.GuildText,
+    parent: TICKETS_CREATED_CATEGORY_ID,
+    permissionOverwrites: overwrites,
+    reason: `Tyrone feedback ticket for ${opener?.tag || opener?.id || "unknown user"}`
+  });
+
+  await setChannelTopicMeta(ticketChannel, {
+    openedBy: opener?.id || "",
+    openedAt: String(Date.now()),
+    source: "tyrone_feedback",
+    reportId: report?.id ? String(report.id) : "",
+    responseLogId: responseLog?.id ? String(responseLog.id) : ""
+  });
+
+  ticketRuntime.set(ticketChannel.id, {
+    openerId: opener?.id || null,
+    awaitingIssueText: false,
+    lastUserMessageAt: nowMs(),
+    warnTimeout: null,
+    closeTimeout: null,
+    staffSummarySent: true
+  });
+
+  const pingLine =
+    `${safeTagRole(TICKET_ALWAYS_PING_ROLE_ID)} ${safeTagRole(TICKET_ALWAYS_PING_ROLE_ID_2)}`.trim();
+
+  const sourceLines = [];
+  sourceLines.push("**Tyrone Feedback Ticket**");
+  sourceLines.push(`Reporter: <@${opener?.id || "unknown"}>`);
+  if (report?.report_type) {
+    sourceLines.push(`Report type: ${report.report_type}`);
+  }
+  if (summary) {
+    sourceLines.push("");
+    sourceLines.push("Summary:");
+    sourceLines.push(summary);
+  }
+  if (responseLog) {
+    sourceLines.push("");
+    sourceLines.push("Recent Tyrone response:");
+    sourceLines.push(`Path: ${responseLog.path || "unknown"}`);
+    sourceLines.push(`Prompt: ${responseLog.prompt_text || "(missing)"}`);
+    sourceLines.push(`Reply: ${responseLog.response_text || "(missing)"}`);
+  }
+  if (report?.tyrone_guess) {
+    sourceLines.push("");
+    sourceLines.push("Tyrone guess:");
+    sourceLines.push(report.tyrone_guess);
+  }
+
+  await ticketChannel.send({
+    content:
+      (pingLine ? `${pingLine}\n` : "") +
+      `Hi <@${opener?.id || "unknown"}>, I am sorry Tyrone handled that badly. ` +
+      "A staff ticket was created. Please allow up to 2 hours for it to be claimed.",
+    allowedMentions: { parse: [], users: opener?.id ? [opener.id] : [] }
+  });
+
+  await ticketChannel.send({
+    content: sourceLines.join("\n"),
+    allowedMentions: { parse: [] }
+  });
+
+  await ticketChannel.send({
+    content: "Staff controls (staff only):",
+    components: [ticketControlsRow(false)]
+  });
+
+  await postToLog(
+    guild,
+    `🎫 Tyrone feedback ticket created: <#${ticketChannel.id}> for <@${opener?.id || "unknown"}>`
+  );
+
+  if (opener?.id) {
+    resetInactivityTimers(guild, ticketChannel, opener.id);
+  }
+
+  return {
+    ok: true,
+    channelId: ticketChannel.id
+  };
+}
+
 // ---------- Exports ----------
 module.exports = {
   handleInteraction,
   handleButton,
   handleMessage,
-  startTicketJanitor
+  startTicketJanitor,
+  createTyroneFeedbackTicket
 };

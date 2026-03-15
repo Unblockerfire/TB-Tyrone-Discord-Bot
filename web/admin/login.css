@@ -1,0 +1,111 @@
+:root {
+  --bg: #f5efe3;
+  --ink: #1d2a21;
+  --muted: #637164;
+  --card: rgba(255, 252, 245, 0.92);
+  --line: rgba(29, 42, 33, 0.12);
+  --accent: #17594a;
+  --danger: #9f2d2d;
+  --shadow: 0 24px 60px rgba(54, 43, 24, 0.16);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  color: var(--ink);
+  font-family: Georgia, "Times New Roman", serif;
+  background:
+    radial-gradient(circle at top left, rgba(217, 143, 61, 0.18), transparent 30%),
+    radial-gradient(circle at top right, rgba(23, 89, 74, 0.16), transparent 28%),
+    linear-gradient(180deg, #faf4e8 0%, var(--bg) 100%);
+}
+
+button,
+input {
+  font: inherit;
+}
+
+.login-card {
+  width: min(100%, 520px);
+  margin: 20px;
+  padding: 30px;
+  border-radius: 28px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+
+.eyebrow {
+  margin: 0 0 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 12px;
+  color: var(--accent);
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(36px, 7vw, 56px);
+  line-height: 0.98;
+}
+
+.lede {
+  color: var(--muted);
+  font-size: 17px;
+  line-height: 1.5;
+}
+
+.login-form {
+  display: grid;
+  gap: 14px;
+}
+
+.login-form label {
+  display: grid;
+  gap: 8px;
+}
+
+input {
+  width: 100%;
+  border-radius: 16px;
+  border: 1px solid rgba(29, 42, 33, 0.14);
+  background: rgba(255, 255, 255, 0.86);
+  color: var(--ink);
+  padding: 13px 14px;
+}
+
+button {
+  margin-top: 8px;
+  border: none;
+  cursor: pointer;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fffdf7;
+  padding: 12px 18px;
+}
+
+button:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+.notice {
+  margin-top: 16px;
+  padding: 13px 14px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.7);
+  color: var(--muted);
+}
+
+.notice.error {
+  border-color: rgba(159, 45, 45, 0.2);
+  color: var(--danger);
+  background: rgba(244, 221, 221, 0.9);
+}

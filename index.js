@@ -33,9 +33,10 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.DirectMessages
   ],
-  partials: [Partials.GuildMember]
+  partials: [Partials.GuildMember, Partials.Channel]
 });
 
 client.once("clientReady", () => {
@@ -122,6 +123,7 @@ client.on("interactionCreate", async (interaction) => {
 
         // Tyrone issue report
         case "report-issue":
+        case "report":
           await tyrone.handleInteraction(interaction, { client, db });
           return;
 
@@ -168,6 +170,12 @@ client.on("interactionCreate", async (interaction) => {
           ? await fortniteQueue.handleButton(interaction, { client, db })
           : false;
       if (handledByFortnite) return;
+
+      const handledByTyrone =
+        tyrone && typeof tyrone.handleButton === "function"
+          ? await tyrone.handleButton(interaction, { client, db })
+          : false;
+      if (handledByTyrone) return;
 
       const handledByTickets =
         tickets && typeof tickets.handleButton === "function"

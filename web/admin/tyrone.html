@@ -9,54 +9,65 @@
 <body>
   <div class="admin-shell">
     <header class="hero">
-      <div>
+      <div class="hero-copy">
         <p class="eyebrow">TB Server Bot</p>
-        <h1>Tyrone Admin Dashboard</h1>
-        <p class="lede">Edit Tyrone’s prompt, FAQ, permissions, cache, and live behavior without redeploying.</p>
+        <h1>Tyrone Control Room</h1>
+        <p class="lede">
+          Live settings, chat training, seen-message visibility, response history, correction rules, and feedback review.
+        </p>
       </div>
-      <div class="hero-card">
-        <div class="stat-label">Current status</div>
-        <div id="heroStatus" class="hero-value">Loading...</div>
-        <div id="heroMeta" class="hero-meta">Checking Tyrone runtime state.</div>
+      <div class="hero-actions">
+        <div class="hero-card">
+          <div class="stat-label">Runtime status</div>
+          <div id="heroStatus" class="hero-value">Loading...</div>
+          <div id="heroMeta" class="hero-meta">Booting dashboard state.</div>
+        </div>
+        <div class="toolbar">
+          <button id="refreshStateButton" type="button" class="ghost-button">Refresh</button>
+          <button id="logoutButton" type="button" class="danger-button">Logout</button>
+        </div>
       </div>
     </header>
 
+    <div id="pageNotice" class="notice notice-loading">Loading Tyrone dashboard...</div>
+
     <main class="grid">
-      <section class="panel panel-overview">
+      <section class="panel panel-overview" id="overviewSection">
         <div class="panel-header">
           <h2>Overview</h2>
-          <button id="refreshStateButton" type="button" class="ghost-button">Refresh</button>
+          <div class="panel-actions">
+            <button id="saveSettingsButton" type="button">Save settings</button>
+          </div>
         </div>
         <div id="overviewGrid" class="overview-grid"></div>
       </section>
 
-      <section class="panel">
+      <section class="panel" id="responseSection">
         <div class="panel-header">
           <h2>Response Controls</h2>
-          <button id="saveSettingsButton" type="button">Save settings</button>
         </div>
         <form id="settingsForm" class="form-grid">
-          <label class="toggle">
+          <label class="toggle tile">
             <input type="checkbox" name="enabled" />
             <span>Tyrone enabled</span>
           </label>
 
-          <label class="toggle">
+          <label class="toggle tile">
             <input type="checkbox" name="ignore_owner_messages" />
             <span>Ignore owner messages</span>
           </label>
 
-          <label class="toggle">
+          <label class="toggle tile">
             <input type="checkbox" name="direct_command_enabled" />
             <span>Allow `!tyrone` command</span>
           </label>
 
-          <label class="toggle">
+          <label class="toggle tile">
             <input type="checkbox" name="mention_reply_enabled" />
             <span>Allow @mention replies</span>
           </label>
 
-          <label class="toggle">
+          <label class="toggle tile">
             <input type="checkbox" name="soft_intercept_enabled" />
             <span>Enable soft intercept nag</span>
           </label>
@@ -67,18 +78,27 @@
           </label>
 
           <label class="full">
-            <span>System prompt</span>
-            <textarea name="system_prompt" rows="8"></textarea>
+            <span class="field-header">
+              <span>System prompt</span>
+              <button type="button" class="ghost-button mini-button improve-button" data-field="system_prompt" data-purpose="system prompt">Improve with AI</button>
+            </span>
+            <textarea name="system_prompt" rows="10"></textarea>
           </label>
 
           <label class="full">
-            <span>Outro template</span>
-            <textarea name="outro_template" rows="4"></textarea>
+            <span class="field-header">
+              <span>Outro template</span>
+              <button type="button" class="ghost-button mini-button improve-button" data-field="outro_template" data-purpose="discord bot outro">Improve with AI</button>
+            </span>
+            <textarea name="outro_template" rows="5"></textarea>
           </label>
 
           <label class="full">
-            <span>Soft intercept message template</span>
-            <textarea name="soft_intercept_message_template" rows="6"></textarea>
+            <span class="field-header">
+              <span>Soft intercept message template</span>
+              <button type="button" class="ghost-button mini-button improve-button" data-field="soft_intercept_message_template" data-purpose="soft intercept message">Improve with AI</button>
+            </span>
+            <textarea name="soft_intercept_message_template" rows="7"></textarea>
           </label>
 
           <label class="full">
@@ -88,28 +108,28 @@
         </form>
       </section>
 
-      <section class="panel">
+      <section class="panel" id="routingSection">
         <div class="panel-header">
           <h2>Permissions and Routing</h2>
         </div>
         <div class="form-grid compact">
           <label>
-            <span>Tyrone channel ID</span>
+            <span class="field-header"><span>Tyrone channel ID</span><small id="origin_channel_id" class="origin-pill"></small></span>
             <input type="text" name="channel_id" form="settingsForm" />
           </label>
 
           <label>
-            <span>Allowed role ID</span>
+            <span class="field-header"><span>Allowed role ID</span><small id="origin_allowed_role_id" class="origin-pill"></small></span>
             <input type="text" name="allowed_role_id" form="settingsForm" />
           </label>
 
           <label>
-            <span>Issues channel ID</span>
+            <span class="field-header"><span>Issues channel ID</span><small id="origin_issues_channel_id" class="origin-pill"></small></span>
             <input type="text" name="issues_channel_id" form="settingsForm" />
           </label>
 
           <label>
-            <span>Owner user ID</span>
+            <span class="field-header"><span>Owner user ID</span><small id="origin_owner_user_id" class="origin-pill"></small></span>
             <input type="text" name="owner_user_id" form="settingsForm" />
           </label>
 
@@ -138,103 +158,110 @@
             <input type="number" name="auto_nag_delay_ms" form="settingsForm" />
           </label>
         </div>
+
+        <div class="embedded-panel">
+          <div class="panel-header">
+            <h3>Dashboard Chatbot</h3>
+          </div>
+          <form id="chatForm" class="chat-form">
+            <label class="full">
+              <span>Ask, test, or train Tyrone</span>
+              <textarea name="query" rows="4" placeholder="Ask Tyrone a question, quiz him, or tell him what to do differently..."></textarea>
+            </label>
+            <label>
+              <span>Mode</span>
+              <select name="mode">
+                <option value="chat">Normal chat</option>
+                <option value="quiz">Quiz / test</option>
+                <option value="training">Training / correction</option>
+              </select>
+            </label>
+            <label>
+              <span>User ID</span>
+              <input type="text" name="userId" placeholder="dashboard-admin" />
+            </label>
+            <label>
+              <span>Username</span>
+              <input type="text" name="username" placeholder="DashboardAdmin" />
+            </label>
+            <div class="full chat-form-actions">
+              <button id="chatSendButton" type="submit">Send to Tyrone</button>
+            </div>
+          </form>
+          <div id="chatHistory" class="feed bounded-feed"></div>
+        </div>
       </section>
 
-      <section class="panel panel-faq">
+      <section class="panel panel-wide" id="faqSection">
         <div class="panel-header">
           <h2>FAQ Manager</h2>
           <button id="addFaqButton" type="button" class="ghost-button">New FAQ</button>
         </div>
-        <div id="faqList" class="faq-list"></div>
+        <div id="faqList" class="stack"></div>
       </section>
 
-      <section class="panel">
+      <section class="panel panel-wide" id="correctionsSection">
         <div class="panel-header">
-          <h2>Cache and Testing</h2>
+          <h2>Training and Corrections</h2>
+          <button id="addCorrectionButton" type="button" class="ghost-button">New correction</button>
         </div>
-        <div class="cache-toolbar">
-          <div>
-            <div class="stat-label">Cache rows</div>
-            <div id="cacheCount" class="stat-big">0</div>
-          </div>
+        <div id="correctionsList" class="stack"></div>
+      </section>
+
+      <section class="panel" id="seenSection">
+        <div class="panel-header">
+          <h2>Seen Chat</h2>
+        </div>
+        <div id="seenChatList" class="feed bounded-feed"></div>
+      </section>
+
+      <section class="panel" id="responsesSection">
+        <div class="panel-header">
+          <h2>Response History</h2>
+        </div>
+        <div id="responsesList" class="feed bounded-feed"></div>
+      </section>
+
+      <section class="panel" id="memorySection">
+        <div class="panel-header">
+          <h2>Memory</h2>
+        </div>
+        <div id="memoryGrid" class="memory-grid"></div>
+      </section>
+
+      <section class="panel" id="cacheSection">
+        <div class="panel-header">
+          <h2>Cache</h2>
           <button id="clearCacheButton" type="button" class="danger-button">Clear cache</button>
         </div>
-
-        <div id="cacheEntries" class="cache-entries"></div>
-
-        <form id="testForm" class="form-grid test-grid">
-          <label class="full">
-            <span>Sample question</span>
-            <textarea name="query" rows="4" placeholder="Ask Tyrone something..."></textarea>
-          </label>
-
-          <label>
-            <span>Sample user ID</span>
-            <input type="text" name="userId" placeholder="123456789012345678" />
-          </label>
-
-          <label>
-            <span>Sample username</span>
-            <input type="text" name="username" placeholder="DashboardUser" />
-          </label>
-
-          <div class="full">
-            <button id="runTestButton" type="submit">Run test</button>
+        <div class="cache-toolbar">
+          <div class="overview-card clickable-card" data-target="responsesSection">
+            <div class="muted">Cache rows</div>
+            <strong id="cacheCount">0</strong>
           </div>
-        </form>
-
-        <div id="testResult" class="result-box muted">No test run yet.</div>
+          <div class="overview-card">
+            <div class="muted">Max age</div>
+            <strong id="cacheAgeText">0 ms</strong>
+          </div>
+        </div>
+        <div id="cacheEntries" class="feed bounded-feed"></div>
       </section>
 
-      <section class="panel">
+      <section class="panel panel-wide" id="reportsSection">
+        <div class="panel-header">
+          <h2>Feedback Reports</h2>
+        </div>
+        <div id="reportsList" class="stack"></div>
+      </section>
+
+      <section class="panel panel-wide" id="eventsSection">
         <div class="panel-header">
           <h2>Recent Activity</h2>
         </div>
-        <div id="eventsList" class="events-list"></div>
+        <div id="eventsList" class="feed bounded-feed"></div>
       </section>
     </main>
   </div>
-
-  <template id="faqTemplate">
-    <form class="faq-card">
-      <div class="faq-row">
-        <label>
-          <span>Label</span>
-          <input type="text" name="label" />
-        </label>
-        <label>
-          <span>Match type</span>
-          <select name="match_type">
-            <option value="includes">Includes</option>
-            <option value="exact">Exact</option>
-          </select>
-        </label>
-        <label>
-          <span>Sort order</span>
-          <input type="number" name="sort_order" />
-        </label>
-        <label class="toggle faq-toggle">
-          <input type="checkbox" name="enabled" />
-          <span>Enabled</span>
-        </label>
-      </div>
-
-      <label>
-        <span>Patterns</span>
-        <textarea name="pattern" rows="4" placeholder="One trigger per line"></textarea>
-      </label>
-
-      <label>
-        <span>Answer</span>
-        <textarea name="answer" rows="5"></textarea>
-      </label>
-
-      <div class="faq-actions">
-        <button type="submit">Save FAQ</button>
-        <button type="button" class="ghost-button faq-delete">Delete</button>
-      </div>
-    </form>
-  </template>
 
   <script src="/admin/tyrone/assets/tyrone.js"></script>
 </body>

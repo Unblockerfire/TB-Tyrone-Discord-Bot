@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tyrone Admin Login</title>
+  <link rel="stylesheet" href="/admin/tyrone/assets/login.css" />
+</head>
+<body>
+  <main class="login-shell">
+    <section class="login-card">
+      <p class="eyebrow">TB Server Bot</p>
+      <h1>Tyrone Admin Login</h1>
+      <p class="lede">Sign in to open the dashboard, training tools, response history, and feedback queue.</p>
+
+      <form id="loginForm" class="login-form">
+        <label>
+          <span>Username</span>
+          <input type="text" name="username" autocomplete="username" required />
+        </label>
+        <label>
+          <span>Password</span>
+          <input type="password" name="password" autocomplete="current-password" required />
+        </label>
+        <button id="loginButton" type="submit">Open dashboard</button>
+      </form>
+
+      <div id="loginNotice" class="notice">Enter your Tyrone admin credentials.</div>
+    </section>
+  </main>
+
+  <script src="/admin/tyrone/assets/login.js"></script>
+</body>
+</html>

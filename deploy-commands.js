@@ -287,6 +287,20 @@ const commands = [
 
   // -------- REPORT ISSUE --------
   new SlashCommandBuilder()
+    .setName("report")
+    .setDescription("Tell Tyrone he answered wrong or should not have answered")
+    .addStringOption(option =>
+      option
+        .setName("type")
+        .setDescription("What kind of Tyrone issue are you reporting?")
+        .setRequired(true)
+        .addChoices(
+          { name: "Answered incorrectly", value: "incorrect" },
+          { name: "Should not have answered", value: "should_not_answer" }
+        )
+    ),
+
+  new SlashCommandBuilder()
     .setName("report-issue")
     .setDescription("Report an issue with Tyrone and attach your latest Tyrone convo link if available")
     .addStringOption(option =>

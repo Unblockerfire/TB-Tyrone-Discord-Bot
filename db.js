@@ -89,6 +89,75 @@ db.prepare(`
   )
 `).run();
 
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS tyrone_seen_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id TEXT,
+    channel_id TEXT,
+    guild_id TEXT,
+    user_id TEXT,
+    username TEXT,
+    content TEXT,
+    outcome TEXT,
+    detail_json TEXT,
+    created_at INTEGER NOT NULL
+  )
+`).run();
+
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS tyrone_response_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_type TEXT NOT NULL,
+    source_ref TEXT,
+    channel_id TEXT,
+    guild_id TEXT,
+    user_id TEXT,
+    username TEXT,
+    prompt_text TEXT,
+    response_text TEXT,
+    path TEXT,
+    detail_json TEXT,
+    created_at INTEGER NOT NULL
+  )
+`).run();
+
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS tyrone_corrections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    label TEXT,
+    trigger_text TEXT NOT NULL,
+    response_text TEXT NOT NULL,
+    notes TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    source_response_log_id INTEGER,
+    updated_at INTEGER NOT NULL
+  )
+`).run();
+
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS tyrone_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    reporter_user_id TEXT NOT NULL,
+    reporter_username TEXT,
+    guild_id TEXT,
+    channel_id TEXT,
+    report_type TEXT NOT NULL,
+    feedback_mode TEXT NOT NULL,
+    source_response_log_id INTEGER,
+    source_seen_message_id INTEGER,
+    question_text TEXT,
+    response_text TEXT,
+    tyrone_guess TEXT,
+    user_feedback TEXT,
+    admin_resolution TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    detail_json TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )
+`).run();
+
 // ---------- FORTNITE TABLES ----------
 
 // fortnite_links: Discord user <-> Fortnite username link + verification/rules status
@@ -341,6 +410,224 @@ const listTyroneEventsStmt = db.prepare(`
   FROM tyrone_events
   ORDER BY created_at DESC, id DESC
   LIMIT ?
+`);
+
+const insertTyroneSeenMessageStmt = db.prepare(`
+  INSERT INTO tyrone_seen_messages (
+    message_id,
+    channel_id,
+    guild_id,
+    user_id,
+    username,
+    content,
+    outcome,
+    detail_json,
+    created_at
+  )
+  VALUES (
+    @message_id,
+    @channel_id,
+    @guild_id,
+    @user_id,
+    @username,
+    @content,
+    @outcome,
+    @detail_json,
+    @created_at
+  )
+`);
+
+const updateTyroneSeenMessageOutcomeStmt = db.prepare(`
+  UPDATE tyrone_seen_messages
+  SET outcome = @outcome,
+      detail_json = @detail_json
+  WHERE id = @id
+`);
+
+const listTyroneSeenMessagesStmt = db.prepare(`
+  SELECT id, message_id, channel_id, guild_id, user_id, username, content, outcome, detail_json, created_at
+  FROM tyrone_seen_messages
+  ORDER BY created_at DESC, id DESC
+  LIMIT ?
+`);
+
+const getTyroneSeenMessageByIdStmt = db.prepare(`
+  SELECT id, message_id, channel_id, guild_id, user_id, username, content, outcome, detail_json, created_at
+  FROM tyrone_seen_messages
+  WHERE id = ?
+`);
+
+const insertTyroneResponseLogStmt = db.prepare(`
+  INSERT INTO tyrone_response_logs (
+    source_type,
+    source_ref,
+    channel_id,
+    guild_id,
+    user_id,
+    username,
+    prompt_text,
+    response_text,
+    path,
+    detail_json,
+    created_at
+  )
+  VALUES (
+    @source_type,
+    @source_ref,
+    @channel_id,
+    @guild_id,
+    @user_id,
+    @username,
+    @prompt_text,
+    @response_text,
+    @path,
+    @detail_json,
+    @created_at
+  )
+`);
+
+const listTyroneResponseLogsStmt = db.prepare(`
+  SELECT id, source_type, source_ref, channel_id, guild_id, user_id, username, prompt_text, response_text, path, detail_json, created_at
+  FROM tyrone_response_logs
+  ORDER BY created_at DESC, id DESC
+  LIMIT ?
+`);
+
+const getTyroneResponseLogByIdStmt = db.prepare(`
+  SELECT id, source_type, source_ref, channel_id, guild_id, user_id, username, prompt_text, response_text, path, detail_json, created_at
+  FROM tyrone_response_logs
+  WHERE id = ?
+`);
+
+const findRecentTyroneResponseLogStmt = db.prepare(`
+  SELECT id, source_type, source_ref, channel_id, guild_id, user_id, username, prompt_text, response_text, path, detail_json, created_at
+  FROM tyrone_response_logs
+  WHERE user_id = ?
+    AND (? IS NULL OR channel_id = ?)
+  ORDER BY created_at DESC, id DESC
+  LIMIT 1
+`);
+
+const insertTyroneCorrectionStmt = db.prepare(`
+  INSERT INTO tyrone_corrections (
+    label,
+    trigger_text,
+    response_text,
+    notes,
+    enabled,
+    sort_order,
+    source_response_log_id,
+    updated_at
+  )
+  VALUES (
+    @label,
+    @trigger_text,
+    @response_text,
+    @notes,
+    @enabled,
+    @sort_order,
+    @source_response_log_id,
+    @updated_at
+  )
+`);
+
+const updateTyroneCorrectionStmt = db.prepare(`
+  UPDATE tyrone_corrections
+  SET label = @label,
+      trigger_text = @trigger_text,
+      response_text = @response_text,
+      notes = @notes,
+      enabled = @enabled,
+      sort_order = @sort_order,
+      updated_at = @updated_at
+  WHERE id = @id
+`);
+
+const deleteTyroneCorrectionStmt = db.prepare(`
+  DELETE FROM tyrone_corrections
+  WHERE id = ?
+`);
+
+const listTyroneCorrectionsStmt = db.prepare(`
+  SELECT id, label, trigger_text, response_text, notes, enabled, sort_order, source_response_log_id, updated_at
+  FROM tyrone_corrections
+  ORDER BY sort_order ASC, id ASC
+`);
+
+const getTyroneCorrectionByIdStmt = db.prepare(`
+  SELECT id, label, trigger_text, response_text, notes, enabled, sort_order, source_response_log_id, updated_at
+  FROM tyrone_corrections
+  WHERE id = ?
+`);
+
+const insertTyroneReportStmt = db.prepare(`
+  INSERT INTO tyrone_reports (
+    reporter_user_id,
+    reporter_username,
+    guild_id,
+    channel_id,
+    report_type,
+    feedback_mode,
+    source_response_log_id,
+    source_seen_message_id,
+    question_text,
+    response_text,
+    tyrone_guess,
+    user_feedback,
+    admin_resolution,
+    status,
+    detail_json,
+    created_at,
+    updated_at
+  )
+  VALUES (
+    @reporter_user_id,
+    @reporter_username,
+    @guild_id,
+    @channel_id,
+    @report_type,
+    @feedback_mode,
+    @source_response_log_id,
+    @source_seen_message_id,
+    @question_text,
+    @response_text,
+    @tyrone_guess,
+    @user_feedback,
+    @admin_resolution,
+    @status,
+    @detail_json,
+    @created_at,
+    @updated_at
+  )
+`);
+
+const updateTyroneReportStmt = db.prepare(`
+  UPDATE tyrone_reports
+  SET feedback_mode = @feedback_mode,
+      tyrone_guess = @tyrone_guess,
+      user_feedback = @user_feedback,
+      admin_resolution = @admin_resolution,
+      status = @status,
+      detail_json = @detail_json,
+      updated_at = @updated_at
+  WHERE id = @id
+`);
+
+const listTyroneReportsStmt = db.prepare(`
+  SELECT id, reporter_user_id, reporter_username, guild_id, channel_id, report_type, feedback_mode,
+         source_response_log_id, source_seen_message_id, question_text, response_text, tyrone_guess,
+         user_feedback, admin_resolution, status, detail_json, created_at, updated_at
+  FROM tyrone_reports
+  ORDER BY updated_at DESC, id DESC
+  LIMIT ?
+`);
+
+const getTyroneReportByIdStmt = db.prepare(`
+  SELECT id, reporter_user_id, reporter_username, guild_id, channel_id, report_type, feedback_mode,
+         source_response_log_id, source_seen_message_id, question_text, response_text, tyrone_guess,
+         user_feedback, admin_resolution, status, detail_json, created_at, updated_at
+  FROM tyrone_reports
+  WHERE id = ?
 `);
 
 // Fortnite links
@@ -800,6 +1087,209 @@ function listTyroneEvents(limit = 20) {
   }));
 }
 
+function parseDetailJson(raw) {
+  try {
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return raw || null;
+  }
+}
+
+function logTyroneSeenMessage(entry = {}) {
+  const now = Date.now();
+  const result = insertTyroneSeenMessageStmt.run({
+    message_id: entry.message_id || null,
+    channel_id: entry.channel_id || null,
+    guild_id: entry.guild_id || null,
+    user_id: entry.user_id || null,
+    username: entry.username || null,
+    content: entry.content || "",
+    outcome: entry.outcome || "seen",
+    detail_json: entry.detail ? JSON.stringify(entry.detail) : null,
+    created_at: now
+  });
+
+  return getTyroneSeenMessageById(result.lastInsertRowid);
+}
+
+function updateTyroneSeenMessageOutcome(id, outcome, detail = null) {
+  updateTyroneSeenMessageOutcomeStmt.run({
+    id: Number(id),
+    outcome: String(outcome || "updated"),
+    detail_json: detail ? JSON.stringify(detail) : null
+  });
+  return getTyroneSeenMessageById(id);
+}
+
+function listTyroneSeenMessages(limit = 100) {
+  const safeLimit = Math.max(1, Math.min(500, Number(limit || 100)));
+  return listTyroneSeenMessagesStmt.all(safeLimit).map(row => ({
+    ...row,
+    detail: parseDetailJson(row.detail_json)
+  }));
+}
+
+function getTyroneSeenMessageById(id) {
+  const row = getTyroneSeenMessageByIdStmt.get(Number(id));
+  if (!row) return null;
+  return { ...row, detail: parseDetailJson(row.detail_json) };
+}
+
+function logTyroneResponse(entry = {}) {
+  const now = Date.now();
+  const result = insertTyroneResponseLogStmt.run({
+    source_type: entry.source_type || "discord",
+    source_ref: entry.source_ref || null,
+    channel_id: entry.channel_id || null,
+    guild_id: entry.guild_id || null,
+    user_id: entry.user_id || null,
+    username: entry.username || null,
+    prompt_text: entry.prompt_text || "",
+    response_text: entry.response_text || "",
+    path: entry.path || "unknown",
+    detail_json: entry.detail ? JSON.stringify(entry.detail) : null,
+    created_at: now
+  });
+
+  return getTyroneResponseLogById(result.lastInsertRowid);
+}
+
+function listTyroneResponseLogs(limit = 100) {
+  const safeLimit = Math.max(1, Math.min(500, Number(limit || 100)));
+  return listTyroneResponseLogsStmt.all(safeLimit).map(row => ({
+    ...row,
+    detail: parseDetailJson(row.detail_json)
+  }));
+}
+
+function getTyroneResponseLogById(id) {
+  const row = getTyroneResponseLogByIdStmt.get(Number(id));
+  if (!row) return null;
+  return { ...row, detail: parseDetailJson(row.detail_json) };
+}
+
+function findRecentTyroneResponseLog(userId, channelId = null) {
+  const row = findRecentTyroneResponseLogStmt.get(String(userId), channelId, channelId);
+  if (!row) return null;
+  return { ...row, detail: parseDetailJson(row.detail_json) };
+}
+
+function listTyroneCorrections() {
+  return listTyroneCorrectionsStmt.all().map(row => ({
+    ...row,
+    enabled: !!row.enabled
+  }));
+}
+
+function getTyroneCorrectionById(id) {
+  const row = getTyroneCorrectionByIdStmt.get(Number(id));
+  return row ? { ...row, enabled: !!row.enabled } : null;
+}
+
+function createTyroneCorrection({
+  label = null,
+  trigger_text,
+  response_text,
+  notes = null,
+  enabled = 1,
+  sort_order = 0,
+  source_response_log_id = null
+}) {
+  const now = Date.now();
+  const result = insertTyroneCorrectionStmt.run({
+    label: label ? String(label).trim() : null,
+    trigger_text: String(trigger_text || "").trim(),
+    response_text: String(response_text || "").trim(),
+    notes: notes ? String(notes).trim() : null,
+    enabled: enabled ? 1 : 0,
+    sort_order: Number(sort_order || 0),
+    source_response_log_id: source_response_log_id ? Number(source_response_log_id) : null,
+    updated_at: now
+  });
+  return getTyroneCorrectionById(result.lastInsertRowid);
+}
+
+function updateTyroneCorrection(id, {
+  label = null,
+  trigger_text,
+  response_text,
+  notes = null,
+  enabled = 1,
+  sort_order = 0
+}) {
+  const now = Date.now();
+  updateTyroneCorrectionStmt.run({
+    id: Number(id),
+    label: label ? String(label).trim() : null,
+    trigger_text: String(trigger_text || "").trim(),
+    response_text: String(response_text || "").trim(),
+    notes: notes ? String(notes).trim() : null,
+    enabled: enabled ? 1 : 0,
+    sort_order: Number(sort_order || 0),
+    updated_at: now
+  });
+  return getTyroneCorrectionById(id);
+}
+
+function deleteTyroneCorrection(id) {
+  return deleteTyroneCorrectionStmt.run(Number(id));
+}
+
+function createTyroneReport(entry = {}) {
+  const now = Date.now();
+  const result = insertTyroneReportStmt.run({
+    reporter_user_id: String(entry.reporter_user_id || ""),
+    reporter_username: entry.reporter_username || null,
+    guild_id: entry.guild_id || null,
+    channel_id: entry.channel_id || null,
+    report_type: String(entry.report_type || "incorrect"),
+    feedback_mode: String(entry.feedback_mode || "none"),
+    source_response_log_id: entry.source_response_log_id ? Number(entry.source_response_log_id) : null,
+    source_seen_message_id: entry.source_seen_message_id ? Number(entry.source_seen_message_id) : null,
+    question_text: entry.question_text || null,
+    response_text: entry.response_text || null,
+    tyrone_guess: entry.tyrone_guess || null,
+    user_feedback: entry.user_feedback || null,
+    admin_resolution: entry.admin_resolution || null,
+    status: entry.status || "pending",
+    detail_json: entry.detail ? JSON.stringify(entry.detail) : null,
+    created_at: now,
+    updated_at: now
+  });
+  return getTyroneReportById(result.lastInsertRowid);
+}
+
+function updateTyroneReport(id, patch = {}) {
+  const current = getTyroneReportById(id);
+  if (!current) return null;
+  const now = Date.now();
+  updateTyroneReportStmt.run({
+    id: Number(id),
+    feedback_mode: patch.feedback_mode || current.feedback_mode,
+    tyrone_guess: patch.tyrone_guess !== undefined ? patch.tyrone_guess : current.tyrone_guess,
+    user_feedback: patch.user_feedback !== undefined ? patch.user_feedback : current.user_feedback,
+    admin_resolution: patch.admin_resolution !== undefined ? patch.admin_resolution : current.admin_resolution,
+    status: patch.status || current.status,
+    detail_json: JSON.stringify(patch.detail !== undefined ? patch.detail : current.detail),
+    updated_at: now
+  });
+  return getTyroneReportById(id);
+}
+
+function listTyroneReports(limit = 100) {
+  const safeLimit = Math.max(1, Math.min(500, Number(limit || 100)));
+  return listTyroneReportsStmt.all(safeLimit).map(row => ({
+    ...row,
+    detail: parseDetailJson(row.detail_json)
+  }));
+}
+
+function getTyroneReportById(id) {
+  const row = getTyroneReportByIdStmt.get(Number(id));
+  if (!row) return null;
+  return { ...row, detail: parseDetailJson(row.detail_json) };
+}
+
 // ---------- FORTNITE LINK HELPERS ----------
 
 function getFortniteLink(userId) {
@@ -1192,6 +1682,23 @@ module.exports = {
   countTyroneFaq,
   logTyroneEvent,
   listTyroneEvents,
+  logTyroneSeenMessage,
+  updateTyroneSeenMessageOutcome,
+  listTyroneSeenMessages,
+  getTyroneSeenMessageById,
+  logTyroneResponse,
+  listTyroneResponseLogs,
+  getTyroneResponseLogById,
+  findRecentTyroneResponseLog,
+  listTyroneCorrections,
+  getTyroneCorrectionById,
+  createTyroneCorrection,
+  updateTyroneCorrection,
+  deleteTyroneCorrection,
+  createTyroneReport,
+  updateTyroneReport,
+  listTyroneReports,
+  getTyroneReportById,
 
   // fortnite links
   getFortniteLink,
