@@ -21,6 +21,10 @@ const tickets = require("./commands/tickets");
 const roleSelect = require("./commands/roleSelect");
 const fortniteQueue = require("./commands/fortniteQueue");
 
+if (tyrone && typeof tyrone.initializeAdminState === "function") {
+  tyrone.initializeAdminState(db);
+}
+
 startQueueServer(db);
 
 // ---------- CLIENT SETUP ----------
@@ -87,6 +91,7 @@ client.on("interactionCreate", async (interaction) => {
         case "setup-chat":
         case "setup-giveaways":
         case "setup-announcements":
+        case "setup-party":
         case "setup-notify-all":
           await roleSelect.handleInteraction(interaction, { client, db });
           return;

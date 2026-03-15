@@ -106,6 +106,10 @@ const commands = [
     .setDescription("Post the Announcements role button panel (owner/admin)"),
 
   new SlashCommandBuilder()
+    .setName("setup-party")
+    .setDescription("Post the Party Member role button panel (owner/admin)"),
+
+  new SlashCommandBuilder()
     .setName("setup-notify-all")
     .setDescription("Post the combined notification roles panel (owner/admin)"),
 

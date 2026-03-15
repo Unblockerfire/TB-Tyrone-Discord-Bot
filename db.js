@@ -59,6 +59,36 @@ db.prepare(`
   )
 `).run();
 
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS tyrone_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  )
+`).run();
+
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS tyrone_faq (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    label TEXT,
+    match_type TEXT NOT NULL DEFAULT 'includes',
+    pattern TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL
+  )
+`).run();
+
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS tyrone_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    detail_json TEXT,
+    created_at INTEGER NOT NULL
+  )
+`).run();
+
 // ---------- FORTNITE TABLES ----------
 
 // fortnite_links: Discord user <-> Fortnite username link + verification/rules status
@@ -217,6 +247,22 @@ const countTyroneCacheStmt = db.prepare(`
   FROM tyrone_ai_cache
 `);
 
+const listTyroneCacheStmt = db.prepare(`
+  SELECT question_key, answer, created_at, last_used_at, use_count
+  FROM tyrone_ai_cache
+  ORDER BY last_used_at DESC
+  LIMIT ?
+`);
+
+const clearTyroneCacheStmt = db.prepare(`
+  DELETE FROM tyrone_ai_cache
+`);
+
+const deleteTyroneCacheByKeyStmt = db.prepare(`
+  DELETE FROM tyrone_ai_cache
+  WHERE question_key = ?
+`);
+
 const trimOldestTyroneCacheStmt = db.prepare(`
   DELETE FROM tyrone_ai_cache
   WHERE question_key IN (
@@ -225,6 +271,76 @@ const trimOldestTyroneCacheStmt = db.prepare(`
     ORDER BY last_used_at ASC
     LIMIT ?
   )
+`);
+
+const getTyroneSettingStmt = db.prepare(`
+  SELECT key, value, updated_at
+  FROM tyrone_settings
+  WHERE key = ?
+`);
+
+const listTyroneSettingsStmt = db.prepare(`
+  SELECT key, value, updated_at
+  FROM tyrone_settings
+`);
+
+const upsertTyroneSettingStmt = db.prepare(`
+  INSERT INTO tyrone_settings (key, value, updated_at)
+  VALUES (@key, @value, @updated_at)
+  ON CONFLICT(key) DO UPDATE SET
+    value = excluded.value,
+    updated_at = excluded.updated_at
+`);
+
+const listTyroneFaqStmt = db.prepare(`
+  SELECT id, label, match_type, pattern, answer, enabled, sort_order, updated_at
+  FROM tyrone_faq
+  ORDER BY sort_order ASC, id ASC
+`);
+
+const getTyroneFaqByIdStmt = db.prepare(`
+  SELECT id, label, match_type, pattern, answer, enabled, sort_order, updated_at
+  FROM tyrone_faq
+  WHERE id = ?
+`);
+
+const insertTyroneFaqStmt = db.prepare(`
+  INSERT INTO tyrone_faq (label, match_type, pattern, answer, enabled, sort_order, updated_at)
+  VALUES (@label, @match_type, @pattern, @answer, @enabled, @sort_order, @updated_at)
+`);
+
+const updateTyroneFaqStmt = db.prepare(`
+  UPDATE tyrone_faq
+  SET label = @label,
+      match_type = @match_type,
+      pattern = @pattern,
+      answer = @answer,
+      enabled = @enabled,
+      sort_order = @sort_order,
+      updated_at = @updated_at
+  WHERE id = @id
+`);
+
+const deleteTyroneFaqStmt = db.prepare(`
+  DELETE FROM tyrone_faq
+  WHERE id = ?
+`);
+
+const countTyroneFaqStmt = db.prepare(`
+  SELECT COUNT(*) as cnt
+  FROM tyrone_faq
+`);
+
+const insertTyroneEventStmt = db.prepare(`
+  INSERT INTO tyrone_events (kind, detail_json, created_at)
+  VALUES (?, ?, ?)
+`);
+
+const listTyroneEventsStmt = db.prepare(`
+  SELECT id, kind, detail_json, created_at
+  FROM tyrone_events
+  ORDER BY created_at DESC, id DESC
+  LIMIT ?
 `);
 
 // Fortnite links
@@ -545,6 +661,143 @@ function setTyroneCachedAnswer(question, answer, maxEntries = 500) {
   }
 
   return true;
+}
+
+function getTyroneCacheStats() {
+  const row = countTyroneCacheStmt.get() || { cnt: 0 };
+  return { count: Number(row.cnt || 0) };
+}
+
+function listTyroneCache(limit = 25) {
+  const safeLimit = Math.max(1, Math.min(100, Number(limit || 25)));
+  return listTyroneCacheStmt.all(safeLimit);
+}
+
+function clearTyroneCache() {
+  return clearTyroneCacheStmt.run();
+}
+
+function deleteTyroneCacheByKey(questionKey) {
+  if (!questionKey) return null;
+  return deleteTyroneCacheByKeyStmt.run(questionKey);
+}
+
+function getTyroneSetting(key) {
+  return getTyroneSettingStmt.get(key) || null;
+}
+
+function listTyroneSettings() {
+  return listTyroneSettingsStmt.all();
+}
+
+function setTyroneSetting(key, value) {
+  const now = Date.now();
+  const stored =
+    typeof value === "string"
+      ? value
+      : JSON.stringify(value);
+
+  upsertTyroneSettingStmt.run({
+    key: String(key),
+    value: stored,
+    updated_at: now
+  });
+
+  return getTyroneSetting(key);
+}
+
+function setManyTyroneSettings(entries) {
+  if (!entries || typeof entries !== "object") return [];
+
+  const tx = db.transaction((obj) => {
+    for (const [key, value] of Object.entries(obj)) {
+      setTyroneSetting(key, value);
+    }
+  });
+
+  tx(entries);
+  return listTyroneSettings();
+}
+
+function listTyroneFaq() {
+  return listTyroneFaqStmt.all();
+}
+
+function getTyroneFaqById(id) {
+  return getTyroneFaqByIdStmt.get(id) || null;
+}
+
+function createTyroneFaq({ label = null, match_type = "includes", pattern, answer, enabled = 1, sort_order = 0 }) {
+  const now = Date.now();
+  const result = insertTyroneFaqStmt.run({
+    label: label ? String(label).trim() : null,
+    match_type: String(match_type || "includes").trim() || "includes",
+    pattern: String(pattern || "").trim(),
+    answer: String(answer || "").trim(),
+    enabled: enabled ? 1 : 0,
+    sort_order: Number(sort_order || 0),
+    updated_at: now
+  });
+
+  return getTyroneFaqById(result.lastInsertRowid);
+}
+
+function updateTyroneFaq(id, { label = null, match_type = "includes", pattern, answer, enabled = 1, sort_order = 0 }) {
+  const now = Date.now();
+  updateTyroneFaqStmt.run({
+    id: Number(id),
+    label: label ? String(label).trim() : null,
+    match_type: String(match_type || "includes").trim() || "includes",
+    pattern: String(pattern || "").trim(),
+    answer: String(answer || "").trim(),
+    enabled: enabled ? 1 : 0,
+    sort_order: Number(sort_order || 0),
+    updated_at: now
+  });
+
+  return getTyroneFaqById(id);
+}
+
+function deleteTyroneFaq(id) {
+  return deleteTyroneFaqStmt.run(Number(id));
+}
+
+function countTyroneFaq() {
+  const row = countTyroneFaqStmt.get() || { cnt: 0 };
+  return Number(row.cnt || 0);
+}
+
+function logTyroneEvent(kind, detail = null) {
+  const safeKind = String(kind || "").trim();
+  if (!safeKind) return null;
+
+  const detailJson =
+    detail === null || detail === undefined
+      ? null
+      : JSON.stringify(detail);
+
+  const now = Date.now();
+  const result = insertTyroneEventStmt.run(safeKind, detailJson, now);
+  return {
+    id: result.lastInsertRowid,
+    kind: safeKind,
+    detail_json: detailJson,
+    created_at: now
+  };
+}
+
+function listTyroneEvents(limit = 20) {
+  const safeLimit = Math.max(1, Math.min(100, Number(limit || 20)));
+  return listTyroneEventsStmt.all(safeLimit).map(row => ({
+    ...row,
+    detail: (() => {
+      try {
+        return row.detail_json ? JSON.parse(row.detail_json) : null;
+      } catch {
+        return row.detail_json || null;
+      }
+    })()
+  }));
 }
 
 // ---------- FORTNITE LINK HELPERS ----------
@@ -923,6 +1176,22 @@ module.exports = {
   normalizeQuestionKey,
   getTyroneCachedAnswer,
   setTyroneCachedAnswer,
+  getTyroneCacheStats,
+  listTyroneCache,
+  clearTyroneCache,
+  deleteTyroneCacheByKey,
+  getTyroneSetting,
+  listTyroneSettings,
+  setTyroneSetting,
+  setManyTyroneSettings,
+  listTyroneFaq,
+  getTyroneFaqById,
+  createTyroneFaq,
+  updateTyroneFaq,
+  deleteTyroneFaq,
+  countTyroneFaq,
+  logTyroneEvent,
+  listTyroneEvents,
 
   // fortnite links
   getFortniteLink,

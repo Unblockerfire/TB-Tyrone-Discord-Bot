@@ -19,12 +19,14 @@ const ROLE_LIVE = "1477879260860387340";
 const ROLE_CHAT = "1477879653342646434";
 const ROLE_GIVEAWAYS = "1477879786285305887";
 const ROLE_ANNOUNCEMENTS = "1477879887007187125";
+const ROLE_PARTY_MEMBER = "1482213741574623330";
 
 const NOTIFY_CONFIG = {
   live: { roleId: ROLE_LIVE, label: "Live Notifications", emoji: "🔴" },
   chat: { roleId: ROLE_CHAT, label: "Chat Revive", emoji: "🟠" },
   giveaways: { roleId: ROLE_GIVEAWAYS, label: "Giveaways", emoji: "🟢" },
-  announcements: { roleId: ROLE_ANNOUNCEMENTS, label: "Announcements", emoji: "🔵" }
+  announcements: { roleId: ROLE_ANNOUNCEMENTS, label: "Announcements", emoji: "🔵" },
+  party: { roleId: ROLE_PARTY_MEMBER, label: "Party Member", emoji: "🎮" }
 };
 
 // ------ EMBEDS ------
@@ -101,6 +103,24 @@ function buildPanelEmbed(kind) {
       });
   }
 
+  if (kind === "party") {
+    return base
+      .setTitle("🎮 Party Member Updates")
+      .setDescription(
+        "Get pinged for Fortnite party/lobby updates.\n\n" +
+          "Use the buttons below to add or remove the role anytime."
+      )
+      .addFields({
+        name: "What you get",
+        value:
+          "• Pings when party access changes\n" +
+          "• Updates on who can join the lobby\n" +
+          "• Notices for open or limited party nights\n\n" +
+          "Use this if you want updates about joining the party.",
+        inline: false
+      });
+  }
+
   // notify-all
   return base
     .setTitle("Notification Roles")
@@ -113,7 +133,12 @@ function buildPanelEmbed(kind) {
       { name: "🔴 Live Notifications", value: "Pinged when we go live.", inline: false },
       { name: "🟠 Chat Revive", value: "Pinged when the server needs activity.", inline: false },
       { name: "🟢 Giveaways", value: "Pinged when giveaways start.", inline: false },
-      { name: "🔵 Announcements", value: "Pinged for important updates only.", inline: false }
+      { name: "🔵 Announcements", value: "Pinged for important updates only.", inline: false },
+      {
+        name: "🎮 Party Member",
+        value: "Pinged for Fortnite party updates and who can join.",
+        inline: false
+      }
     );
 }
 
@@ -168,7 +193,16 @@ function buildButtonsFor(kind) {
     ];
   }
 
-  // notify-all (8 buttons, split into 2 rows)
+  if (kind === "party") {
+    return [
+      new ActionRowBuilder().addComponents(
+        makeAdd("party", "Party Member"),
+        makeRemove("party", "Party Member")
+      )
+    ];
+  }
+
+  // notify-all
   const row1 = new ActionRowBuilder().addComponents(
     makeAdd("live", "Live"),
     makeRemove("live", "Live"),
@@ -183,11 +217,16 @@ function buildButtonsFor(kind) {
     makeRemove("announcements", "Announcements")
   );
 
-  return [row1, row2];
+  const row3 = new ActionRowBuilder().addComponents(
+    makeAdd("party", "Party Member"),
+    makeRemove("party", "Party Member")
+  );
+
+  return [row1, row2, row3];
 }
 
 // ------ SLASH COMMANDS ------
-// /setup-live, /setup-chat, /setup-giveaways, /setup-announcements, /setup-notify-all
+// /setup-live, /setup-chat, /setup-giveaways, /setup-announcements, /setup-party, /setup-notify-all
 
 async function handleInteraction(interaction) {
   if (!interaction.isChatInputCommand()) return false;
@@ -198,6 +237,7 @@ async function handleInteraction(interaction) {
     "setup-chat",
     "setup-giveaways",
     "setup-announcements",
+    "setup-party",
     "setup-notify-all"
   ].includes(cmd);
 
@@ -237,7 +277,9 @@ async function handleInteraction(interaction) {
           ? "giveaways"
           : cmd === "setup-announcements"
             ? "announcements"
-            : "notify-all";
+            : cmd === "setup-party"
+              ? "party"
+              : "notify-all";
 
   const embed = buildPanelEmbed(kind);
   const components = buildButtonsFor(kind);

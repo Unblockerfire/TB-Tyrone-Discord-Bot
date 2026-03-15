@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tyrone Admin</title>
+  <link rel="stylesheet" href="/admin/tyrone/assets/tyrone.css" />
+</head>
+<body>
+  <div class="admin-shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">TB Server Bot</p>
+        <h1>Tyrone Admin Dashboard</h1>
+        <p class="lede">Edit Tyrone’s prompt, FAQ, permissions, cache, and live behavior without redeploying.</p>
+      </div>
+      <div class="hero-card">
+        <div class="stat-label">Current status</div>
+        <div id="heroStatus" class="hero-value">Loading...</div>
+        <div id="heroMeta" class="hero-meta">Checking Tyrone runtime state.</div>
+      </div>
+    </header>
+
+    <main class="grid">
+      <section class="panel panel-overview">
+        <div class="panel-header">
+          <h2>Overview</h2>
+          <button id="refreshStateButton" type="button" class="ghost-button">Refresh</button>
+        </div>
+        <div id="overviewGrid" class="overview-grid"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>Response Controls</h2>
+          <button id="saveSettingsButton" type="button">Save settings</button>
+        </div>
+        <form id="settingsForm" class="form-grid">
+          <label class="toggle">
+            <input type="checkbox" name="enabled" />
+            <span>Tyrone enabled</span>
+          </label>
+
+          <label class="toggle">
+            <input type="checkbox" name="ignore_owner_messages" />
+            <span>Ignore owner messages</span>
+          </label>
+
+          <label class="toggle">
+            <input type="checkbox" name="direct_command_enabled" />
+            <span>Allow `!tyrone` command</span>
+          </label>
+
+          <label class="toggle">
+            <input type="checkbox" name="mention_reply_enabled" />
+            <span>Allow @mention replies</span>
+          </label>
+
+          <label class="toggle">
+            <input type="checkbox" name="soft_intercept_enabled" />
+            <span>Enable soft intercept nag</span>
+          </label>
+
+          <label>
+            <span>OpenAI model</span>
+            <input type="text" name="openai_model" placeholder="gpt-4.1-mini" />
+          </label>
+
+          <label class="full">
+            <span>System prompt</span>
+            <textarea name="system_prompt" rows="8"></textarea>
+          </label>
+
+          <label class="full">
+            <span>Outro template</span>
+            <textarea name="outro_template" rows="4"></textarea>
+          </label>
+
+          <label class="full">
+            <span>Soft intercept message template</span>
+            <textarea name="soft_intercept_message_template" rows="6"></textarea>
+          </label>
+
+          <label class="full">
+            <span>Ignore keywords</span>
+            <textarea name="ignore_keywords" rows="4" placeholder="One keyword per line"></textarea>
+          </label>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>Permissions and Routing</h2>
+        </div>
+        <div class="form-grid compact">
+          <label>
+            <span>Tyrone channel ID</span>
+            <input type="text" name="channel_id" form="settingsForm" />
+          </label>
+
+          <label>
+            <span>Allowed role ID</span>
+            <input type="text" name="allowed_role_id" form="settingsForm" />
+          </label>
+
+          <label>
+            <span>Issues channel ID</span>
+            <input type="text" name="issues_channel_id" form="settingsForm" />
+          </label>
+
+          <label>
+            <span>Owner user ID</span>
+            <input type="text" name="owner_user_id" form="settingsForm" />
+          </label>
+
+          <label>
+            <span>Cache max age (ms)</span>
+            <input type="number" name="cache_max_age_ms" form="settingsForm" />
+          </label>
+
+          <label>
+            <span>Cache max entries</span>
+            <input type="number" name="cache_max_entries" form="settingsForm" />
+          </label>
+
+          <label>
+            <span>Approval window (ms)</span>
+            <input type="number" name="approval_window_ms" form="settingsForm" />
+          </label>
+
+          <label>
+            <span>Nag cooldown (ms)</span>
+            <input type="number" name="nag_cooldown_ms" form="settingsForm" />
+          </label>
+
+          <label>
+            <span>Auto nag delay (ms)</span>
+            <input type="number" name="auto_nag_delay_ms" form="settingsForm" />
+          </label>
+        </div>
+      </section>
+
+      <section class="panel panel-faq">
+        <div class="panel-header">
+          <h2>FAQ Manager</h2>
+          <button id="addFaqButton" type="button" class="ghost-button">New FAQ</button>
+        </div>
+        <div id="faqList" class="faq-list"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>Cache and Testing</h2>
+        </div>
+        <div class="cache-toolbar">
+          <div>
+            <div class="stat-label">Cache rows</div>
+            <div id="cacheCount" class="stat-big">0</div>
+          </div>
+          <button id="clearCacheButton" type="button" class="danger-button">Clear cache</button>
+        </div>
+
+        <div id="cacheEntries" class="cache-entries"></div>
+
+        <form id="testForm" class="form-grid test-grid">
+          <label class="full">
+            <span>Sample question</span>
+            <textarea name="query" rows="4" placeholder="Ask Tyrone something..."></textarea>
+          </label>
+
+          <label>
+            <span>Sample user ID</span>
+            <input type="text" name="userId" placeholder="123456789012345678" />
+          </label>
+
+          <label>
+            <span>Sample username</span>
+            <input type="text" name="username" placeholder="DashboardUser" />
+          </label>
+
+          <div class="full">
+            <button id="runTestButton" type="submit">Run test</button>
+          </div>
+        </form>
+
+        <div id="testResult" class="result-box muted">No test run yet.</div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>Recent Activity</h2>
+        </div>
+        <div id="eventsList" class="events-list"></div>
+      </section>
+    </main>
+  </div>
+
+  <template id="faqTemplate">
+    <form class="faq-card">
+      <div class="faq-row">
+        <label>
+          <span>Label</span>
+          <input type="text" name="label" />
+        </label>
+        <label>
+          <span>Match type</span>
+          <select name="match_type">
+            <option value="includes">Includes</option>
+            <option value="exact">Exact</option>
+          </select>
+        </label>
+        <label>
+          <span>Sort order</span>
+          <input type="number" name="sort_order" />
+        </label>
+        <label class="toggle faq-toggle">
+          <input type="checkbox" name="enabled" />
+          <span>Enabled</span>
+        </label>
+      </div>
+
+      <label>
+        <span>Patterns</span>
+        <textarea name="pattern" rows="4" placeholder="One trigger per line"></textarea>
+      </label>
+
+      <label>
+        <span>Answer</span>
+        <textarea name="answer" rows="5"></textarea>
+      </label>
+
+      <div class="faq-actions">
+        <button type="submit">Save FAQ</button>
+        <button type="button" class="ghost-button faq-delete">Delete</button>
+      </div>
+    </form>
+  </template>
+
+  <script src="/admin/tyrone/assets/tyrone.js"></script>
+</body>
+</html>
