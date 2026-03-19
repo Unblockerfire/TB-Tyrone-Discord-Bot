@@ -11,6 +11,8 @@ const {
 const PRIVATE_VC_CATEGORY_ID = process.env.PRIVATE_VC_CATEGORY_ID || null;
 const PRIVATE_VC_CREATE_CHANNEL_ID =
   process.env.PRIVATE_VC_CREATE_CHANNEL_ID || "1484035753502703676";
+const PRIVATE_VC_INVITE_CHANNEL_ID =
+  process.env.PRIVATE_VC_INVITE_CHANNEL_ID || "1484039510588129462";
 const PRIVATE_VC_EMPTY_DELETE_MINUTES = Number(process.env.PRIVATE_VC_EMPTY_DELETE_MINUTES || "15");
 const PRIVATE_VC_BYPASS_ROLE_IDS = (process.env.PRIVATE_VC_BYPASS_ROLE_IDS || "")
   .split(",")
@@ -295,10 +297,16 @@ async function applyPrivateVcAccess(channel, record) {
 }
 
 async function announceInvite(textChannel, owner, targetUser, voiceChannel) {
-  if (!textChannel?.isTextBased?.()) return;
-  await textChannel.send({
+  const guild = voiceChannel?.guild || textChannel?.guild || null;
+  const destination =
+    (guild && await guild.channels.fetch(PRIVATE_VC_INVITE_CHANNEL_ID).catch(() => null)) ||
+    textChannel;
+
+  if (!destination?.isTextBased?.()) return;
+
+  await destination.send({
     content:
-      `Hey <@${targetUser.id}>, <@${owner.id}> invited you to join **${voiceChannel.name}** in <#${voiceChannel.id}>.`,
+      `Hey <@${targetUser.id}> | @ for help, <@${owner.id}> invited you to join ${voiceChannel.name} in <#${voiceChannel.id}>.`,
     allowedMentions: { users: [targetUser.id, owner.id] }
   });
 }
