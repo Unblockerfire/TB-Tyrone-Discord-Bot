@@ -24,6 +24,64 @@ const fortniteQueue = require("./commands/fortniteQueue");
 const privateVc = require("./commands/privateVc");
 const bangCommands = require("./commands/bangCommands");
 
+const MEE6_BOT_ID = "159985870458322944";
+const MEE6_ACHIEVEMENT_FORWARD_CHANNEL_ID = "1478930416097562728";
+
+function isMee6AchievementMessage(message) {
+  if (!message || message.author?.id !== MEE6_BOT_ID) return false;
+
+  const content = String(message.content || "").trim();
+  if (/unlocked the achievement/i.test(content)) return true;
+
+  const embedText = (message.embeds || [])
+    .map(embed => [embed.title, embed.description]
+      .filter(Boolean)
+      .join(" "))
+    .join(" ");
+
+  return /unlocked the achievement/i.test(embedText);
+}
+
+async function forwardMee6Achievement(message, client) {
+  if (!isMee6AchievementMessage(message)) return false;
+
+  const targetChannel = await client.channels
+    .fetch(MEE6_ACHIEVEMENT_FORWARD_CHANNEL_ID)
+    .catch(() => null);
+
+  if (!targetChannel?.isTextBased()) {
+    console.error(
+      "[MEE6] Forward target channel is missing or not text-based:",
+      MEE6_ACHIEVEMENT_FORWARD_CHANNEL_ID
+    );
+    return false;
+  }
+
+  const embedParts = (message.embeds || [])
+    .map(embed => [embed.title, embed.description].filter(Boolean).join("\n"))
+    .filter(Boolean);
+  const forwardContent = [message.content, ...embedParts].filter(Boolean).join("\n\n").trim();
+
+  if (!forwardContent) {
+    console.warn("[MEE6] Matched achievement message had no forwardable content.");
+    return false;
+  }
+
+  await targetChannel.send(forwardContent);
+  await message.delete().catch(error => {
+    console.error("[MEE6] Failed to delete original achievement message:", error);
+  });
+  console.log(
+    "[MEE6] Forwarded achievement message",
+    JSON.stringify({
+      source_channel_id: message.channelId,
+      target_channel_id: MEE6_ACHIEVEMENT_FORWARD_CHANNEL_ID,
+      message_id: message.id
+    })
+  );
+  return true;
+}
+
 function logBoot(stage, detail = "") {
   const suffix = detail ? ` ${detail}` : "";
   console.log(`[BOOT] ${stage}${suffix}`);
@@ -331,6 +389,9 @@ client.on("interactionCreate", async (interaction) => {
 // ---------- MESSAGE ROUTER ----------
 client.on("messageCreate", async (message) => {
   try {
+    const handledMee6Achievement = await forwardMee6Achievement(message, client);
+    if (handledMee6Achievement) return;
+
     if (message.author.bot) return;
 
     console.log(
