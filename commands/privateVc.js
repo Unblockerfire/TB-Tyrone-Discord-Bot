@@ -3,7 +3,9 @@ const {
   ButtonBuilder,
   ButtonStyle,
   ChannelType,
-  PermissionsBitField
+  PermissionsBitField,
+  StringSelectMenuBuilder,
+  UserSelectMenuBuilder
 } = require("discord.js");
 
 const PRIVATE_VC_CATEGORY_ID = process.env.PRIVATE_VC_CATEGORY_ID || null;
@@ -26,7 +28,11 @@ function createPanelComponents() {
       new ButtonBuilder()
         .setCustomId("private_vc_create")
         .setLabel("Make Private VC")
-        .setStyle(ButtonStyle.Primary)
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId("private_vc_manage_sessions")
+        .setLabel("Edit Sessions")
+        .setStyle(ButtonStyle.Secondary)
     )
   ];
 }
@@ -53,6 +59,76 @@ function buildPrivateVcStatusLines(db) {
       ` | ${emptyState}`
     );
   });
+}
+
+function getOwnedSessions(db, guildId, userId) {
+  return db
+    .listPrivateVcChannels()
+    .filter(record => record.guild_id === guildId && record.owner_id === userId);
+}
+
+function buildManageMessage(record) {
+  const invited = record.invited_user_ids.length
+    ? record.invited_user_ids.map(userId => `<@${userId}>`).join(", ")
+    : "none";
+  return (
+    `**Managing Private VC**\n` +
+    `VC: <#${record.channel_id}>\n` +
+    `Owner: <@${record.owner_id}>\n` +
+    `Private: ${record.is_private ? "yes" : "no"}\n` +
+    `Invited: ${invited}\n\n` +
+    "Use the selector below to add people, or the buttons to update the VC."
+  );
+}
+
+function buildManageComponents(record, ownedSessions = []) {
+  const components = [];
+
+  components.push(
+    new ActionRowBuilder().addComponents(
+      new UserSelectMenuBuilder()
+        .setCustomId(`private_vc_invite_select:${record.channel_id}`)
+        .setPlaceholder("Invite or add people to this VC")
+        .setMinValues(1)
+        .setMaxValues(10)
+    )
+  );
+
+  components.push(
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`private_vc_make_private:${record.channel_id}`)
+        .setLabel("Make Private")
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId(`private_vc_unlock:${record.channel_id}`)
+        .setLabel("Unlock VC")
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(`private_vc_delete:${record.channel_id}`)
+        .setLabel("Delete VC")
+        .setStyle(ButtonStyle.Danger)
+    )
+  );
+
+  if (ownedSessions.length) {
+    components.push(
+      new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId("private_vc_session_select")
+          .setPlaceholder("Switch to another session you own")
+          .addOptions(
+            ownedSessions.slice(0, 25).map(session => ({
+              label: session.name || session.channel_id,
+              value: session.channel_id,
+              description: session.is_private ? "Private VC" : "Unlocked VC"
+            }))
+          )
+      )
+    );
+  }
+
+  return components;
 }
 
 function sanitizeVoiceChannelName(name) {
@@ -352,11 +428,13 @@ async function createTrackedPrivateVc({ interaction, db }) {
   }
 
   setPendingLock(interaction.user.id, voiceChannel.id, interaction.channelId);
+  const ownedSessions = getOwnedSessions(db, guild.id, interaction.user.id);
 
   await interaction.reply({
     content:
       `Private VC created: <#${voiceChannel.id}>.\n` +
-      "Run `!tyrone-lock @user` or `!vcinvite @user` in this channel to invite someone.",
+      "Pick who you want to invite below, or use the edit controls.",
+    components: buildManageComponents(record, ownedSessions),
     ephemeral: true
   });
 
@@ -415,9 +493,163 @@ async function handleInteraction(interaction, { db }) {
 }
 
 async function handleButton(interaction, { db }) {
-  if (interaction.customId !== "private_vc_create") return false;
-  await createTrackedPrivateVc({ interaction, db });
+  const [baseId, channelId] = String(interaction.customId || "").split(":");
+
+  if (baseId === "private_vc_create") {
+    await createTrackedPrivateVc({ interaction, db });
+    return true;
+  }
+
+  if (baseId === "private_vc_manage_sessions") {
+    if (interaction.channelId !== PRIVATE_VC_CREATE_CHANNEL_ID) {
+      await interaction.reply({
+        content: `Private VC session editing only works from <#${PRIVATE_VC_CREATE_CHANNEL_ID}>.`,
+        ephemeral: true
+      });
+      return true;
+    }
+
+    const ownedSessions = getOwnedSessions(db, interaction.guildId, interaction.user.id);
+    if (!ownedSessions.length) {
+      await interaction.reply({
+        content: "You do not own any tracked private VCs right now.",
+        ephemeral: true
+      });
+      return true;
+    }
+
+    const first = ownedSessions[0];
+    await interaction.reply({
+      content: buildManageMessage(first),
+      components: buildManageComponents(first, ownedSessions),
+      ephemeral: true
+    });
+    return true;
+  }
+
+  if (!["private_vc_make_private", "private_vc_unlock", "private_vc_delete"].includes(baseId)) {
+    return false;
+  }
+
+  const record = db.getPrivateVcByChannelId(channelId);
+  if (!record) {
+    await interaction.reply({ content: "That private VC could not be found.", ephemeral: true });
+    return true;
+  }
+
+  const member = interaction.member;
+  if (!canManagePrivateVc(member, record.owner_id)) {
+    await interaction.reply({ content: "You do not own that private VC.", ephemeral: true });
+    return true;
+  }
+
+  const channel = await interaction.guild.channels.fetch(record.channel_id).catch(() => null);
+  if (!channel || channel.type !== ChannelType.GuildVoice) {
+    db.deletePrivateVcByChannelId(record.channel_id);
+    await interaction.reply({ content: "That VC no longer exists.", ephemeral: true });
+    return true;
+  }
+
+  if (baseId === "private_vc_delete") {
+    await deletePrivateVcChannel(interaction.client, db, record, "Private VC deleted from management view");
+    await interaction.update({
+      content: `Deleted private VC **${record.name || channel.name}**.`,
+      components: []
+    });
+    return true;
+  }
+
+  const updated = db.upsertPrivateVc({
+    ...record,
+    name: channel.name,
+    is_private: baseId === "private_vc_make_private"
+  });
+  await applyPrivateVcAccess(channel, updated);
+
+  const ownedSessions = getOwnedSessions(db, interaction.guildId, interaction.user.id);
+  await interaction.update({
+    content: buildManageMessage(updated),
+    components: buildManageComponents(updated, ownedSessions)
+  });
   return true;
+}
+
+async function handleSelectMenu(interaction, { db }) {
+  if (interaction.isStringSelectMenu() && interaction.customId === "private_vc_session_select") {
+    const selectedChannelId = interaction.values[0];
+    const record = db.getPrivateVcByChannelId(selectedChannelId);
+    if (!record) {
+      await interaction.update({
+        content: "That private VC no longer exists.",
+        components: []
+      });
+      return true;
+    }
+
+    const ownedSessions = getOwnedSessions(db, interaction.guildId, interaction.user.id);
+    await interaction.update({
+      content: buildManageMessage(record),
+      components: buildManageComponents(record, ownedSessions)
+    });
+    return true;
+  }
+
+  if (interaction.isUserSelectMenu()) {
+    const [baseId, channelId] = String(interaction.customId || "").split(":");
+    if (baseId !== "private_vc_invite_select") return false;
+
+    const record = db.getPrivateVcByChannelId(channelId);
+    if (!record) {
+      await interaction.update({
+        content: "That private VC could not be found.",
+        components: []
+      });
+      return true;
+    }
+
+    if (!canManagePrivateVc(interaction.member, record.owner_id)) {
+      await interaction.reply({
+        content: "You do not own that private VC.",
+        ephemeral: true
+      });
+      return true;
+    }
+
+    const channel = await interaction.guild.channels.fetch(record.channel_id).catch(() => null);
+    if (!channel || channel.type !== ChannelType.GuildVoice) {
+      db.deletePrivateVcByChannelId(record.channel_id);
+      await interaction.update({
+        content: "That VC no longer exists.",
+        components: []
+      });
+      return true;
+    }
+
+    const invitedUserIds = toInviteList(record, interaction.values);
+    const updated = db.upsertPrivateVc({
+      ...record,
+      name: channel.name,
+      invited_user_ids: invitedUserIds,
+      is_private: true
+    });
+    await applyPrivateVcAccess(channel, updated);
+
+    for (const userId of interaction.values) {
+      const targetUser = await interaction.client.users.fetch(userId).catch(() => null);
+      if (targetUser) {
+        await announceInvite(interaction.channel, interaction.user, targetUser, channel);
+      }
+    }
+
+    const ownedSessions = getOwnedSessions(db, interaction.guildId, interaction.user.id);
+    await interaction.update({
+      content: buildManageMessage(updated),
+      components: buildManageComponents(updated, ownedSessions)
+    });
+    return true;
+  }
+
+  return false;
 }
 
 async function handleLockCommand(message, db) {
@@ -687,6 +919,7 @@ function startPrivateVcJanitor(client, { db }) {
 module.exports = {
   handleInteraction,
   handleButton,
+  handleSelectMenu,
   handleMessage,
   handleVoiceStateUpdate,
   startPrivateVcJanitor

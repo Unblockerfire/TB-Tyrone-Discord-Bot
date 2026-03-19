@@ -208,6 +208,16 @@ client.on("interactionCreate", async (interaction) => {
       return;
     }
 
+    if (interaction.isStringSelectMenu() || interaction.isUserSelectMenu()) {
+      const handledByPrivateVc =
+        privateVc && typeof privateVc.handleSelectMenu === "function"
+          ? await privateVc.handleSelectMenu(interaction, { client, db })
+          : false;
+      if (handledByPrivateVc) return;
+
+      return;
+    }
+
     if (interaction.isModalSubmit()) {
       const handledByFortnite =
         fortniteQueue && typeof fortniteQueue.handleModalSubmit === "function"
