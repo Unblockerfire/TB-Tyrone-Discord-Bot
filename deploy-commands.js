@@ -113,6 +113,10 @@ const commands = [
     .setName("setup-notify-all")
     .setDescription("Post the combined notification roles panel (owner/admin)"),
 
+  new SlashCommandBuilder()
+    .setName("setup-private-vc-panel")
+    .setDescription("Post the private VC creation panel (admin/owner)"),
+
   // -------- LEADERBOARD --------
   new SlashCommandBuilder()
     .setName("setup-leaderboard")

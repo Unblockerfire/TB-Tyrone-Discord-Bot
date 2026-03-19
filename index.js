@@ -20,6 +20,7 @@ const notifyRoles = require("./commands/notifyRoles");
 const tickets = require("./commands/tickets");
 const roleSelect = require("./commands/roleSelect");
 const fortniteQueue = require("./commands/fortniteQueue");
+const privateVc = require("./commands/privateVc");
 
 if (tyrone && typeof tyrone.initializeAdminState === "function") {
   tyrone.initializeAdminState(db);
@@ -33,6 +34,7 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildVoiceStates,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.DirectMessages
   ],
@@ -58,6 +60,15 @@ client.once("clientReady", () => {
     }
   } catch (err) {
     console.error("[Fortnite] Failed to start queue ticker:", err);
+  }
+
+  try {
+    if (privateVc && typeof privateVc.startPrivateVcJanitor === "function") {
+      privateVc.startPrivateVcJanitor(client, { db });
+      console.log("[Private VC] Janitor started ✅");
+    }
+  } catch (err) {
+    console.error("[Private VC] Failed to start janitor:", err);
   }
 });
 
@@ -95,6 +106,10 @@ client.on("interactionCreate", async (interaction) => {
         case "setup-party":
         case "setup-notify-all":
           await roleSelect.handleInteraction(interaction, { client, db });
+          return;
+
+        case "setup-private-vc-panel":
+          await privateVc.handleInteraction(interaction, { client, db });
           return;
 
         // Leaderboard
@@ -177,6 +192,12 @@ client.on("interactionCreate", async (interaction) => {
           : false;
       if (handledByTyrone) return;
 
+      const handledByPrivateVc =
+        privateVc && typeof privateVc.handleButton === "function"
+          ? await privateVc.handleButton(interaction, { client, db })
+          : false;
+      if (handledByPrivateVc) return;
+
       const handledByTickets =
         tickets && typeof tickets.handleButton === "function"
           ? await tickets.handleButton(interaction, { client, db })
@@ -238,6 +259,12 @@ client.on("messageCreate", async (message) => {
     );
 
     await moderation.handleMessage(message, { client, db });
+    const handledByPrivateVc =
+      privateVc && typeof privateVc.handleMessage === "function"
+        ? await privateVc.handleMessage(message, { client, db })
+        : false;
+    if (handledByPrivateVc) return;
+
     await tyrone.handleMessage(message, { client, db });
     await songs.handleMessage(message, { client, db });
     await status.handleMessage(message, { client, db });
@@ -247,6 +274,16 @@ client.on("messageCreate", async (message) => {
     }
   } catch (err) {
     console.error("messageCreate error:", err);
+  }
+});
+
+client.on("voiceStateUpdate", async (oldState, newState) => {
+  try {
+    if (privateVc && typeof privateVc.handleVoiceStateUpdate === "function") {
+      await privateVc.handleVoiceStateUpdate(oldState, newState, { client, db });
+    }
+  } catch (err) {
+    console.error("voiceStateUpdate error:", err);
   }
 });
 

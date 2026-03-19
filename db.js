@@ -158,6 +158,23 @@ db.prepare(`
   )
 `).run();
 
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS private_vc_channels (
+    channel_id TEXT PRIMARY KEY,
+    guild_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    text_channel_id TEXT,
+    category_id TEXT,
+    name TEXT,
+    invited_json TEXT NOT NULL DEFAULT '[]',
+    is_private INTEGER NOT NULL DEFAULT 1,
+    auto_delete_enabled INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    last_empty_at INTEGER
+  )
+`).run();
+
 // ---------- FORTNITE TABLES ----------
 
 // fortnite_links: Discord user <-> Fortnite username link + verification/rules status
@@ -628,6 +645,67 @@ const getTyroneReportByIdStmt = db.prepare(`
          user_feedback, admin_resolution, status, detail_json, created_at, updated_at
   FROM tyrone_reports
   WHERE id = ?
+`);
+
+const getPrivateVcByChannelIdStmt = db.prepare(`
+  SELECT channel_id, guild_id, owner_id, text_channel_id, category_id, name, invited_json,
+         is_private, auto_delete_enabled, created_at, updated_at, last_empty_at
+  FROM private_vc_channels
+  WHERE channel_id = ?
+`);
+
+const listPrivateVcChannelsStmt = db.prepare(`
+  SELECT channel_id, guild_id, owner_id, text_channel_id, category_id, name, invited_json,
+         is_private, auto_delete_enabled, created_at, updated_at, last_empty_at
+  FROM private_vc_channels
+  ORDER BY created_at DESC
+`);
+
+const deletePrivateVcByChannelIdStmt = db.prepare(`
+  DELETE FROM private_vc_channels
+  WHERE channel_id = ?
+`);
+
+const upsertPrivateVcStmt = db.prepare(`
+  INSERT INTO private_vc_channels (
+    channel_id,
+    guild_id,
+    owner_id,
+    text_channel_id,
+    category_id,
+    name,
+    invited_json,
+    is_private,
+    auto_delete_enabled,
+    created_at,
+    updated_at,
+    last_empty_at
+  )
+  VALUES (
+    @channel_id,
+    @guild_id,
+    @owner_id,
+    @text_channel_id,
+    @category_id,
+    @name,
+    @invited_json,
+    @is_private,
+    @auto_delete_enabled,
+    @created_at,
+    @updated_at,
+    @last_empty_at
+  )
+  ON CONFLICT(channel_id) DO UPDATE SET
+    guild_id = excluded.guild_id,
+    owner_id = excluded.owner_id,
+    text_channel_id = excluded.text_channel_id,
+    category_id = excluded.category_id,
+    name = excluded.name,
+    invited_json = excluded.invited_json,
+    is_private = excluded.is_private,
+    auto_delete_enabled = excluded.auto_delete_enabled,
+    updated_at = excluded.updated_at,
+    last_empty_at = excluded.last_empty_at
 `);
 
 // Fortnite links
@@ -1290,6 +1368,67 @@ function getTyroneReportById(id) {
   return { ...row, detail: parseDetailJson(row.detail_json) };
 }
 
+function parsePrivateVcRow(row) {
+  if (!row) return null;
+  let invited_user_ids = [];
+  try {
+    invited_user_ids = row.invited_json ? JSON.parse(row.invited_json) : [];
+  } catch {
+    invited_user_ids = [];
+  }
+
+  return {
+    ...row,
+    invited_user_ids: Array.isArray(invited_user_ids) ? invited_user_ids : [],
+    is_private: !!row.is_private,
+    auto_delete_enabled: !!row.auto_delete_enabled
+  };
+}
+
+function getPrivateVcByChannelId(channelId) {
+  return parsePrivateVcRow(getPrivateVcByChannelIdStmt.get(String(channelId)));
+}
+
+function listPrivateVcChannels() {
+  return listPrivateVcChannelsStmt.all().map(parsePrivateVcRow);
+}
+
+function upsertPrivateVc(entry = {}) {
+  const now = Date.now();
+  const current = entry.channel_id ? getPrivateVcByChannelId(entry.channel_id) : null;
+  upsertPrivateVcStmt.run({
+    channel_id: String(entry.channel_id || current?.channel_id || ""),
+    guild_id: String(entry.guild_id || current?.guild_id || ""),
+    owner_id: String(entry.owner_id || current?.owner_id || ""),
+    text_channel_id: entry.text_channel_id !== undefined ? entry.text_channel_id : (current?.text_channel_id || null),
+    category_id: entry.category_id !== undefined ? entry.category_id : (current?.category_id || null),
+    name: entry.name !== undefined ? entry.name : (current?.name || null),
+    invited_json: JSON.stringify(
+      Array.isArray(entry.invited_user_ids)
+        ? entry.invited_user_ids
+        : (current?.invited_user_ids || [])
+    ),
+    is_private: entry.is_private !== undefined ? (entry.is_private ? 1 : 0) : (current?.is_private ? 1 : 0),
+    auto_delete_enabled:
+      entry.auto_delete_enabled !== undefined
+        ? (entry.auto_delete_enabled ? 1 : 0)
+        : (current?.auto_delete_enabled ? 1 : 0),
+    created_at: current?.created_at || now,
+    updated_at: now,
+    last_empty_at:
+      entry.last_empty_at !== undefined
+        ? entry.last_empty_at
+        : (current?.last_empty_at || null)
+  });
+
+  return getPrivateVcByChannelId(entry.channel_id || current?.channel_id);
+}
+
+function deletePrivateVcByChannelId(channelId) {
+  deletePrivateVcByChannelIdStmt.run(String(channelId));
+  return null;
+}
+
 // ---------- FORTNITE LINK HELPERS ----------
 
 function getFortniteLink(userId) {
@@ -1699,6 +1838,10 @@ module.exports = {
   updateTyroneReport,
   listTyroneReports,
   getTyroneReportById,
+  getPrivateVcByChannelId,
+  listPrivateVcChannels,
+  upsertPrivateVc,
+  deletePrivateVcByChannelId,
 
   // fortnite links
   getFortniteLink,
