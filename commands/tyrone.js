@@ -1210,11 +1210,6 @@ async function handleMessage(message, { db }) {
     return;
   }
 
-  if (settings.ignore_owner_messages && message.author.id === settings.owner_user_id) {
-    db.updateTyroneSeenMessageOutcome(seenLog.id, "ignored_owner", {});
-    return;
-  }
-
   const raw = message.content || "";
   const content = raw.trim();
   const lower = content.toLowerCase();
@@ -1322,6 +1317,13 @@ async function handleMessage(message, { db }) {
         response_log_id: responseLog.id
       });
     }
+    return;
+  }
+
+  if (settings.ignore_owner_messages && message.author.id === settings.owner_user_id) {
+    db.updateTyroneSeenMessageOutcome(seenLog.id, "ignored_owner", {
+      allowed_commands: true
+    });
     return;
   }
 
