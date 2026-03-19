@@ -601,6 +601,78 @@ async function guessReportIssue(questionText, responseText, settings) {
   }
 }
 
+async function classifyHelpRequest(query, draftedReply, settings) {
+  const lower = String(query || "").toLowerCase();
+  const fallbackNeedsStaff =
+    lower.includes("bug") ||
+    lower.includes("broken") ||
+    lower.includes("not working") ||
+    lower.includes("can't") ||
+    lower.includes("cannot") ||
+    lower.includes("appeal") ||
+    lower.includes("ban") ||
+    lower.includes("mute") ||
+    lower.includes("hack") ||
+    lower.includes("report") ||
+    lower.includes("scam") ||
+    lower.includes("access issue") ||
+    lower.includes("missing role") ||
+    lower.includes("permission");
+
+  const apiKey = process.env.OPENAI_API_KEY || null;
+  if (!apiKey) {
+    return {
+      needsStaff: fallbackNeedsStaff,
+      summary: fallbackNeedsStaff
+        ? "This looks like an issue that likely needs staff review."
+        : "This looks simple enough for Tyrone to answer directly."
+    };
+  }
+
+  try {
+    const result = await askOpenAI(
+      [
+        {
+          role: "system",
+          content:
+            "You triage Discord server help requests. Decide whether the bot can answer directly or whether staff help is needed. " +
+            "Reply in exactly two lines:\n" +
+            "DECISION: DIRECT or STAFF\n" +
+            "SUMMARY: one short sentence"
+        },
+        {
+          role: "user",
+          content:
+            `Request:\n${query}\n\n` +
+            `Tyrone draft answer:\n${draftedReply || "(none)"}`
+        }
+      ],
+      settings.openai_model || DEFAULTS.openai_model
+    );
+
+    const lines = String(result || "").split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+    const decisionLine = lines.find(line => line.toUpperCase().startsWith("DECISION:")) || "";
+    const summaryLine = lines.find(line => line.toUpperCase().startsWith("SUMMARY:")) || "";
+    const decision = decisionLine.split(":").slice(1).join(":").trim().toUpperCase();
+    const summary = summaryLine.split(":").slice(1).join(":").trim();
+
+    return {
+      needsStaff: decision === "STAFF",
+      summary: summary || (decision === "STAFF"
+        ? "This request likely needs staff help."
+        : "This request can likely be answered directly.")
+    };
+  } catch (err) {
+    console.error("[Tyrone help triage] error:", err);
+    return {
+      needsStaff: fallbackNeedsStaff,
+      summary: fallbackNeedsStaff
+        ? "This looks like an issue that likely needs staff review."
+        : "This looks simple enough for Tyrone to answer directly."
+    };
+  }
+}
+
 function buildContextSnapshot(settings, corrections) {
   return {
     settings: {
@@ -926,6 +998,71 @@ async function rewriteAdminText(db, payload = {}) {
   const rewritten = await rewriteDiscordText(text, purpose, settings);
   db.logTyroneEvent("admin_rewrite", { purpose });
   return { rewritten };
+}
+
+async function triageHelpRequest(db, payload = {}) {
+  const settings = getRuntimeSettings(db);
+  const faqEntries = getFaqEntries(db);
+  const corrections = getCorrections(db);
+  const query = String(payload.query || "").trim();
+  const author = buildAuthor({
+    id: payload.userId || "request-panel-user",
+    username: payload.username || "RequestPanelUser"
+  });
+
+  if (!query) {
+    return {
+      query,
+      reply: "",
+      path: "empty",
+      needsStaff: false,
+      summary: "No request text was provided.",
+      memory: getRuntimeMemorySnapshot()
+    };
+  }
+
+  const fakeMessage = { author };
+  const result = await answerQuestion(query, fakeMessage, db, {
+    settings,
+    faqEntries,
+    corrections,
+    mention: false
+  });
+
+  const directPaths = new Set([
+    "faq",
+    "correction",
+    "cache",
+    "strike_lookup",
+    "strike_follow_up",
+    "strike_policy_follow_up"
+  ]);
+
+  let needsStaff = false;
+  let summary = "Tyrone can likely answer this directly.";
+
+  if (directPaths.has(result.path)) {
+    needsStaff = false;
+    summary = `Answered directly through Tyrone's ${result.path} path.`;
+  } else if (looksLikeBadAiFallback(result.reply)) {
+    needsStaff = true;
+    summary = "Tyrone could not produce a reliable direct answer.";
+  } else {
+    const decision = await classifyHelpRequest(query, result.reply, settings);
+    needsStaff = !!decision.needsStaff;
+    summary = decision.summary;
+  }
+
+  return {
+    query,
+    reply: result.reply || "",
+    path: result.path,
+    faqId: result.faqId || null,
+    correctionId: result.correctionId || null,
+    needsStaff,
+    summary,
+    memory: result.memory
+  };
 }
 
 async function createReportGuess(db, responseLog, reportType) {
@@ -1435,6 +1572,7 @@ module.exports = {
   getAdminState,
   runAdminTest,
   runDashboardChat,
+  triageHelpRequest,
   rewriteAdminText,
   handleInteraction,
   handleButton,

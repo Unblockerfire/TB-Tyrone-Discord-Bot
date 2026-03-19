@@ -23,6 +23,7 @@ const roleSelect = require("./commands/roleSelect");
 const fortniteQueue = require("./commands/fortniteQueue");
 const privateVc = require("./commands/privateVc");
 const bangCommands = require("./commands/bangCommands");
+const requests = require("./commands/requests");
 
 const MEE6_BOT_ID = "159985870458322944";
 const MEE6_ACHIEVEMENT_FORWARD_CHANNEL_ID = "1478930416097562728";
@@ -244,6 +245,10 @@ client.on("interactionCreate", async (interaction) => {
           await bangCommands.handleInteraction(interaction, { client, db });
           return;
 
+        case "setup-requests":
+          await requests.handleInteraction(interaction, { client, db });
+          return;
+
         // Leaderboard
         case "setup-leaderboard":
         case "leaderboard-add":
@@ -340,6 +345,12 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     if (interaction.isStringSelectMenu() || interaction.isUserSelectMenu()) {
+      const handledByRequests =
+        requests && typeof requests.handleSelectMenu === "function"
+          ? await requests.handleSelectMenu(interaction, { client, db })
+          : false;
+      if (handledByRequests) return;
+
       const handledByPrivateVc =
         privateVc && typeof privateVc.handleSelectMenu === "function"
           ? await privateVc.handleSelectMenu(interaction, { client, db })
@@ -350,6 +361,12 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     if (interaction.isModalSubmit()) {
+      const handledByRequests =
+        requests && typeof requests.handleModalSubmit === "function"
+          ? await requests.handleModalSubmit(interaction, { client, db })
+          : false;
+      if (handledByRequests) return;
+
       const handledByFortnite =
         fortniteQueue && typeof fortniteQueue.handleModalSubmit === "function"
           ? await fortniteQueue.handleModalSubmit(interaction, { client, db })

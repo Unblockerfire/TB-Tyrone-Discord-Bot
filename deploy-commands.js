@@ -125,6 +125,10 @@ const commands = [
     .setName("bang-commands")
     .setDescription("View the current ! command list in a private pane"),
 
+  new SlashCommandBuilder()
+    .setName("setup-requests")
+    .setDescription("Post the Tyrone request/help panel (staff/admin only)"),
+
   // -------- LEADERBOARD --------
   new SlashCommandBuilder()
     .setName("setup-leaderboard")

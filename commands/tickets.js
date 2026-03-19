@@ -1325,11 +1325,150 @@ async function createTyroneFeedbackTicket({ guild, reporter, summary, responseLo
   };
 }
 
+async function createStructuredSupportTicket({
+  guild,
+  opener,
+  source = "request_panel",
+  category = null,
+  issueText = null,
+  summary = null,
+  introMessage = null,
+  awaitingIssueText = false
+}) {
+  const missing = missingConfig();
+  if (missing.length) {
+    return {
+      ok: false,
+      error: "Tyrone ticket system is missing config in .env: " + missing.join(", ")
+    };
+  }
+
+  if (!guild) {
+    return { ok: false, error: "Guild is required to create a support ticket." };
+  }
+
+  const safeBase = `ticket-${opener?.username || "support"}`
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "")
+    .slice(0, 90);
+  const channelName = safeBase || `ticket-${opener?.id || Date.now()}`;
+
+  const overwrites = [
+    {
+      id: guild.roles.everyone.id,
+      deny: [PermissionsBitField.Flags.ViewChannel]
+    }
+  ];
+
+  if (opener?.id) {
+    overwrites.push({
+      id: opener.id,
+      allow: [
+        PermissionsBitField.Flags.ViewChannel,
+        PermissionsBitField.Flags.SendMessages,
+        PermissionsBitField.Flags.ReadMessageHistory
+      ]
+    });
+  }
+
+  for (const rid of TICKET_CLAIM_ROLE_IDS) {
+    overwrites.push({
+      id: rid,
+      allow: [
+        PermissionsBitField.Flags.ViewChannel,
+        PermissionsBitField.Flags.SendMessages,
+        PermissionsBitField.Flags.ReadMessageHistory
+      ]
+    });
+  }
+
+  const ticketChannel = await guild.channels.create({
+    name: channelName,
+    type: ChannelType.GuildText,
+    parent: TICKETS_CREATED_CATEGORY_ID,
+    permissionOverwrites: overwrites,
+    reason: `Support ticket for ${opener?.tag || opener?.id || "unknown user"} via ${source}`
+  });
+
+  const topicPatch = {
+    openedBy: opener?.id || "",
+    openedAt: String(Date.now()),
+    source
+  };
+
+  if (category) {
+    topicPatch.category = String(category).replace(/\s+/g, "_").slice(0, 32);
+  }
+
+  if (issueText) {
+    topicPatch.issueText = encodeURIComponent(String(issueText).slice(0, 240));
+  }
+
+  await setChannelTopicMeta(ticketChannel, topicPatch);
+
+  ticketRuntime.set(ticketChannel.id, {
+    openerId: opener?.id || null,
+    awaitingIssueText: !!awaitingIssueText,
+    lastUserMessageAt: nowMs(),
+    warnTimeout: null,
+    closeTimeout: null,
+    staffSummarySent: !awaitingIssueText
+  });
+
+  const pingLine =
+    `${safeTagRole(TICKET_ALWAYS_PING_ROLE_ID)} ${safeTagRole(TICKET_ALWAYS_PING_ROLE_ID_2)}`.trim();
+
+  const introLines = [];
+  introLines.push(
+    introMessage ||
+      `Hi <@${opener?.id || "unknown"}>, a support ticket was created from the request hub. Please allow up to 2 hours for it to be claimed.`
+  );
+  if (summary) {
+    introLines.push("");
+    introLines.push("Summary:");
+    introLines.push(summary);
+  }
+  if (issueText && !awaitingIssueText) {
+    introLines.push("");
+    introLines.push("Issue:");
+    introLines.push(issueText);
+  }
+  if (awaitingIssueText) {
+    introLines.push("");
+    introLines.push("Please explain your issue in more detail in this ticket.");
+  }
+
+  await ticketChannel.send({
+    content: (pingLine ? `${pingLine}\n` : "") + introLines.join("\n"),
+    allowedMentions: { parse: [], users: opener?.id ? [opener.id] : [] }
+  });
+
+  await ticketChannel.send({
+    content: "Staff controls (staff only):",
+    components: [ticketControlsRow(false)]
+  });
+
+  await postToLog(
+    guild,
+    `🎫 Support ticket created: <#${ticketChannel.id}> for <@${opener?.id || "unknown"}> via ${source}`
+  );
+
+  if (opener?.id) {
+    resetInactivityTimers(guild, ticketChannel, opener.id);
+  }
+
+  return {
+    ok: true,
+    channelId: ticketChannel.id
+  };
+}
+
 // ---------- Exports ----------
 module.exports = {
   handleInteraction,
   handleButton,
   handleMessage,
   startTicketJanitor,
-  createTyroneFeedbackTicket
+  createTyroneFeedbackTicket,
+  createStructuredSupportTicket
 };
