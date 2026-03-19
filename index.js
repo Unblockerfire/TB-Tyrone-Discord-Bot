@@ -1,5 +1,6 @@
 // index.js
 require("dotenv").config();
+const crypto = require("crypto");
 
 const {
   Client,
@@ -22,13 +23,68 @@ const roleSelect = require("./commands/roleSelect");
 const fortniteQueue = require("./commands/fortniteQueue");
 const privateVc = require("./commands/privateVc");
 
-if (tyrone && typeof tyrone.initializeAdminState === "function") {
-  tyrone.initializeAdminState(db);
+function logBoot(stage, detail = "") {
+  const suffix = detail ? ` ${detail}` : "";
+  console.log(`[BOOT] ${stage}${suffix}`);
 }
 
+function logBootError(stage, error) {
+  console.error(`[BOOT] ${stage}`, error);
+}
+
+function fingerprintSecret(value) {
+  if (!value) return "missing";
+  return crypto.createHash("sha256").update(String(value)).digest("hex").slice(0, 12);
+}
+
+function validateEnv() {
+  const token = process.env.DISCORD_TOKEN || "";
+  const clientId = process.env.CLIENT_ID || "";
+  const guildId = process.env.GUILD_ID || "";
+
+  logBoot(
+    "env.validation",
+    JSON.stringify({
+      node_env: process.env.NODE_ENV || "unset",
+      discord_token_present: !!token,
+      discord_token_length: token.length || 0,
+      discord_token_fingerprint: fingerprintSecret(token),
+      client_id_present: !!clientId,
+      client_id: clientId || null,
+      guild_id_present: !!guildId,
+      guild_id: guildId || null
+    })
+  );
+
+  if (!token) {
+    throw new Error("Missing required env var DISCORD_TOKEN.");
+  }
+
+  return { token, clientId, guildId };
+}
+
+process.on("uncaughtException", (error) => {
+  console.error("[PROCESS] uncaughtException", error);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("[PROCESS] unhandledRejection", reason);
+});
+
+logBoot("app.boot.start", `pid=${process.pid} node=${process.version}`);
+
+if (tyrone && typeof tyrone.initializeAdminState === "function") {
+  logBoot("tyrone.initialize.start");
+  tyrone.initializeAdminState(db);
+  logBoot("tyrone.initialize.done");
+}
+
+logBoot("web.startQueueServer.start");
 startQueueServer(db);
+logBoot("web.startQueueServer.done");
 
 // ---------- CLIENT SETUP ----------
+logBoot("discord.client.create.start");
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -40,9 +96,21 @@ const client = new Client({
   ],
   partials: [Partials.GuildMember, Partials.Channel]
 });
+logBoot("discord.client.create.done");
 
 client.once("clientReady", () => {
-  console.log(`Logged in as ${client.user.tag}`);
+  logBoot(
+    "discord.clientReady",
+    JSON.stringify({
+      tag: client.user?.tag || null,
+      user_id: client.user?.id || null,
+      guild_count: client.guilds.cache.size,
+      expected_client_id: process.env.CLIENT_ID || null,
+      client_id_matches_user: !!client.user?.id && !!process.env.CLIENT_ID
+        ? client.user.id === process.env.CLIENT_ID
+        : null
+    })
+  );
 
   try {
     if (tickets && typeof tickets.startTicketJanitor === "function") {
@@ -288,6 +356,44 @@ client.on("messageCreate", async (message) => {
   }
 });
 
+client.on("ready", () => {
+  logBoot(
+    "discord.ready",
+    JSON.stringify({
+      tag: client.user?.tag || null,
+      user_id: client.user?.id || null,
+      guild_count: client.guilds.cache.size
+    })
+  );
+});
+
+client.on("guildCreate", (guild) => {
+  logBoot(
+    "discord.guildCreate",
+    JSON.stringify({
+      guild_id: guild.id,
+      guild_name: guild.name,
+      member_count: guild.memberCount
+    })
+  );
+});
+
+client.on("error", (error) => {
+  console.error("[DISCORD] client.error", error);
+});
+
+client.on("shardError", (error, shardId) => {
+  console.error("[DISCORD] shardError", { shardId, error });
+});
+
+client.on("warn", (warning) => {
+  console.warn("[DISCORD] warn", warning);
+});
+
+client.on("invalidated", () => {
+  console.error("[DISCORD] session invalidated");
+});
+
 client.on("voiceStateUpdate", async (oldState, newState) => {
   try {
     if (privateVc && typeof privateVc.handleVoiceStateUpdate === "function") {
@@ -299,4 +405,20 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
 });
 
 // ---------- LOGIN ----------
-client.login(process.env.DISCORD_TOKEN);
+async function startDiscordBot() {
+  try {
+    const { token, clientId } = validateEnv();
+    logBoot("discord.login.attempt", `client_id=${clientId || "missing"}`);
+    const loginResult = await client.login(token);
+    logBoot(
+      "discord.login.success",
+      `token_fingerprint=${fingerprintSecret(loginResult || token)}`
+    );
+  } catch (error) {
+    logBootError("discord.login.failure", error);
+    process.exitCode = 1;
+    setTimeout(() => process.exit(1), 250);
+  }
+}
+
+startDiscordBot();
