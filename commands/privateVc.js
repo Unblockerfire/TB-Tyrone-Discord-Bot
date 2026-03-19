@@ -7,6 +7,8 @@ const {
 } = require("discord.js");
 
 const PRIVATE_VC_CATEGORY_ID = process.env.PRIVATE_VC_CATEGORY_ID || null;
+const PRIVATE_VC_CREATE_CHANNEL_ID =
+  process.env.PRIVATE_VC_CREATE_CHANNEL_ID || "1484035753502703676";
 const PRIVATE_VC_EMPTY_DELETE_MINUTES = Number(process.env.PRIVATE_VC_EMPTY_DELETE_MINUTES || "15");
 const PRIVATE_VC_BYPASS_ROLE_IDS = (process.env.PRIVATE_VC_BYPASS_ROLE_IDS || "")
   .split(",")
@@ -27,6 +29,30 @@ function createPanelComponents() {
         .setStyle(ButtonStyle.Primary)
     )
   ];
+}
+
+function buildPrivateVcStatusLines(db) {
+  const channels = db.listPrivateVcChannels();
+  if (!channels.length) {
+    return ["No tracked private VCs right now."];
+  }
+
+  return channels.slice(0, 20).map(record => {
+    const invited = record.invited_user_ids.length
+      ? record.invited_user_ids.map(userId => `<@${userId}>`).join(", ")
+      : "none";
+    const emptyState = record.last_empty_at
+      ? `empty since ${new Date(Number(record.last_empty_at)).toLocaleString()}`
+      : "not empty";
+
+    return (
+      `• <#${record.channel_id}>` +
+      ` | owner <@${record.owner_id}>` +
+      ` | private: ${record.is_private ? "yes" : "no"}` +
+      ` | invited: ${invited}` +
+      ` | ${emptyState}`
+    );
+  });
 }
 
 function sanitizeVoiceChannelName(name) {
@@ -289,6 +315,14 @@ async function createTrackedPrivateVc({ interaction, db }) {
     return true;
   }
 
+  if (interaction.channelId !== PRIVATE_VC_CREATE_CHANNEL_ID) {
+    await interaction.reply({
+      content: `Private VC creation only works in <#${PRIVATE_VC_CREATE_CHANNEL_ID}>.`,
+      ephemeral: true
+    });
+    return true;
+  }
+
   const member = interaction.member;
   const guild = interaction.guild;
   const categoryId = PRIVATE_VC_CATEGORY_ID || interaction.channel?.parentId || null;
@@ -331,11 +365,36 @@ async function createTrackedPrivateVc({ interaction, db }) {
 
 async function handleInteraction(interaction, { db }) {
   if (!interaction.isChatInputCommand()) return false;
+
+  if (interaction.commandName === "private-vc-status") {
+    if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageChannels)) {
+      await interaction.reply({
+        content: "You need Manage Channels to view private VC status.",
+        ephemeral: true
+      });
+      return true;
+    }
+
+    await interaction.reply({
+      content: `**Private VC Status**\n${buildPrivateVcStatusLines(db).join("\n")}`,
+      ephemeral: true
+    });
+    return true;
+  }
+
   if (interaction.commandName !== "setup-private-vc-panel") return false;
 
   if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageChannels)) {
     await interaction.reply({
       content: "You need Manage Channels to post the private VC panel.",
+      ephemeral: true
+    });
+    return true;
+  }
+
+  if (interaction.channelId !== PRIVATE_VC_CREATE_CHANNEL_ID) {
+    await interaction.reply({
+      content: `Post the private VC panel in <#${PRIVATE_VC_CREATE_CHANNEL_ID}> only.`,
       ephemeral: true
     });
     return true;

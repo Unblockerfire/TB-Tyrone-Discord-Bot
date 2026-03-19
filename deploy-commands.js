@@ -117,6 +117,10 @@ const commands = [
     .setName("setup-private-vc-panel")
     .setDescription("Post the private VC creation panel (admin/owner)"),
 
+  new SlashCommandBuilder()
+    .setName("private-vc-status")
+    .setDescription("View the currently tracked private voice channels (admin/owner)"),
+
   // -------- LEADERBOARD --------
   new SlashCommandBuilder()
     .setName("setup-leaderboard")

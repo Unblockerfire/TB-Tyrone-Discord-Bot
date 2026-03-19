@@ -109,6 +109,7 @@ client.on("interactionCreate", async (interaction) => {
           return;
 
         case "setup-private-vc-panel":
+        case "private-vc-status":
           await privateVc.handleInteraction(interaction, { client, db });
           return;
 
