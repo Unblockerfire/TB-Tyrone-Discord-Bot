@@ -432,8 +432,38 @@ function looksLikeBadAiFallback(text) {
   );
 }
 
+function looksLikeHelpAnswerStatement(lowered) {
+  if (!lowered) return false;
+
+  const startsLikeAnswer =
+    lowered.startsWith("use ") ||
+    lowered.startsWith("run ") ||
+    lowered.startsWith("go to ") ||
+    lowered.startsWith("check ") ||
+    lowered.startsWith("search for ") ||
+    lowered.startsWith("you can ") ||
+    lowered.startsWith("if you ") ||
+    lowered.startsWith("to apply") ||
+    lowered.startsWith("for help");
+
+  const containsInstructionPhrase =
+    lowered.includes('"/apply" command') ||
+    lowered.includes("use the `/apply`") ||
+    lowered.includes("use the \"/apply\"") ||
+    lowered.includes("search for ") ||
+    lowered.includes("to apply") ||
+    lowered.includes("let us know in ") ||
+    lowered.includes("open a ticket") ||
+    lowered.includes("create a ticket") ||
+    lowered.includes("if you encounter any issues") ||
+    lowered.includes("if you have any issues");
+
+  return startsLikeAnswer || containsInstructionPhrase;
+}
+
 function looksLikeTyroneQuestion(lowered, faqs) {
   if (!lowered || lowered.startsWith("!") || lowered.length < 6) return false;
+  if (looksLikeHelpAnswerStatement(lowered)) return false;
   const hasQuestionMark = lowered.includes("?");
   const startsLikeQuestion =
     lowered.startsWith("hey") ||
