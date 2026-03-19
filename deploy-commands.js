@@ -121,6 +121,10 @@ const commands = [
     .setName("private-vc-status")
     .setDescription("View the currently tracked private voice channels (admin/owner)"),
 
+  new SlashCommandBuilder()
+    .setName("bang-commands")
+    .setDescription("View the current ! command list in a private pane"),
+
   // -------- LEADERBOARD --------
   new SlashCommandBuilder()
     .setName("setup-leaderboard")

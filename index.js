@@ -22,6 +22,7 @@ const tickets = require("./commands/tickets");
 const roleSelect = require("./commands/roleSelect");
 const fortniteQueue = require("./commands/fortniteQueue");
 const privateVc = require("./commands/privateVc");
+const bangCommands = require("./commands/bangCommands");
 
 function logBoot(stage, detail = "") {
   const suffix = detail ? ` ${detail}` : "";
@@ -179,6 +180,10 @@ client.on("interactionCreate", async (interaction) => {
         case "setup-private-vc-panel":
         case "private-vc-status":
           await privateVc.handleInteraction(interaction, { client, db });
+          return;
+
+        case "bang-commands":
+          await bangCommands.handleInteraction(interaction, { client, db });
           return;
 
         // Leaderboard
