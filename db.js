@@ -175,6 +175,25 @@ db.prepare(`
   )
 `).run();
 
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS checklist_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    text TEXT NOT NULL,
+    created_by TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )
+`).run();
+
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS checklist_panels (
+    message_id TEXT PRIMARY KEY,
+    channel_id TEXT NOT NULL,
+    guild_id TEXT,
+    updated_at INTEGER NOT NULL
+  )
+`).run();
+
 // ---------- FORTNITE TABLES ----------
 
 // fortnite_links: Discord user <-> Fortnite username link + verification/rules status
@@ -1777,6 +1796,88 @@ function isFortniteBanned(userId) {
   };
 }
 
+const listChecklistItemsStmt = db.prepare(`
+  SELECT id, text, created_by, created_at, updated_at
+  FROM checklist_items
+  ORDER BY id ASC
+`);
+
+const createChecklistItemStmt = db.prepare(`
+  INSERT INTO checklist_items (text, created_by, created_at, updated_at)
+  VALUES (@text, @created_by, @created_at, @updated_at)
+`);
+
+const deleteChecklistItemStmt = db.prepare(`
+  DELETE FROM checklist_items
+  WHERE id = ?
+`);
+
+const getChecklistItemByIdStmt = db.prepare(`
+  SELECT id, text, created_by, created_at, updated_at
+  FROM checklist_items
+  WHERE id = ?
+`);
+
+const upsertChecklistPanelStmt = db.prepare(`
+  INSERT INTO checklist_panels (message_id, channel_id, guild_id, updated_at)
+  VALUES (@message_id, @channel_id, @guild_id, @updated_at)
+  ON CONFLICT(message_id) DO UPDATE SET
+    channel_id = excluded.channel_id,
+    guild_id = excluded.guild_id,
+    updated_at = excluded.updated_at
+`);
+
+const listChecklistPanelsStmt = db.prepare(`
+  SELECT message_id, channel_id, guild_id, updated_at
+  FROM checklist_panels
+  ORDER BY updated_at DESC
+`);
+
+const deleteChecklistPanelStmt = db.prepare(`
+  DELETE FROM checklist_panels
+  WHERE message_id = ?
+`);
+
+function listChecklistItems() {
+  return listChecklistItemsStmt.all();
+}
+
+function createChecklistItem(text, createdBy = null) {
+  const now = Date.now();
+  const info = createChecklistItemStmt.run({
+    text: String(text || "").trim(),
+    created_by: createdBy ? String(createdBy) : null,
+    created_at: now,
+    updated_at: now
+  });
+  return getChecklistItemByIdStmt.get(info.lastInsertRowid);
+}
+
+function deleteChecklistItem(id) {
+  return deleteChecklistItemStmt.run(id);
+}
+
+function getChecklistItemById(id) {
+  return getChecklistItemByIdStmt.get(id) || null;
+}
+
+function upsertChecklistPanel(panel = {}) {
+  upsertChecklistPanelStmt.run({
+    message_id: String(panel.message_id || ""),
+    channel_id: String(panel.channel_id || ""),
+    guild_id: panel.guild_id ? String(panel.guild_id) : null,
+    updated_at: Date.now()
+  });
+}
+
+function listChecklistPanels() {
+  return listChecklistPanelsStmt.all();
+}
+
+function deleteChecklistPanel(messageId) {
+  return deleteChecklistPanelStmt.run(String(messageId || ""));
+}
+
 // ---------- EXPORTS ----------
 
 module.exports = {
@@ -1842,6 +1943,13 @@ module.exports = {
   listPrivateVcChannels,
   upsertPrivateVc,
   deletePrivateVcByChannelId,
+  listChecklistItems,
+  createChecklistItem,
+  deleteChecklistItem,
+  getChecklistItemById,
+  upsertChecklistPanel,
+  listChecklistPanels,
+  deleteChecklistPanel,
 
   // fortnite links
   getFortniteLink,

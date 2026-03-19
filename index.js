@@ -24,6 +24,7 @@ const fortniteQueue = require("./commands/fortniteQueue");
 const privateVc = require("./commands/privateVc");
 const bangCommands = require("./commands/bangCommands");
 const requests = require("./commands/requests");
+const staffPanels = require("./commands/staffPanels");
 
 const MEE6_BOT_ID = "159985870458322944";
 const MEE6_ACHIEVEMENT_FORWARD_CHANNEL_ID = "1478930416097562728";
@@ -198,6 +199,15 @@ client.once("clientReady", () => {
   } catch (err) {
     console.error("[Private VC] Failed to start janitor:", err);
   }
+
+  try {
+    if (staffPanels && typeof staffPanels.startChecklistTicker === "function") {
+      staffPanels.startChecklistTicker(client, db);
+      console.log("[Checklist] Ticker started ✅");
+    }
+  } catch (err) {
+    console.error("[Checklist] Failed to start ticker:", err);
+  }
 });
 
 // ---------- INTERACTION ROUTER ----------
@@ -247,6 +257,11 @@ client.on("interactionCreate", async (interaction) => {
 
         case "setup-requests":
           await requests.handleInteraction(interaction, { client, db });
+          return;
+
+        case "tyrone-cleanup-setup":
+        case "checklist-setup":
+          await staffPanels.handleInteraction(interaction, { client, db });
           return;
 
         // Leaderboard
@@ -317,6 +332,12 @@ client.on("interactionCreate", async (interaction) => {
           : false;
       if (handledByRoleSelect) return;
 
+      const handledByStaffPanels =
+        staffPanels && typeof staffPanels.handleButton === "function"
+          ? await staffPanels.handleButton(interaction, { client, db })
+          : false;
+      if (handledByStaffPanels) return;
+
       const handledByFortnite =
         fortniteQueue && typeof fortniteQueue.handleButton === "function"
           ? await fortniteQueue.handleButton(interaction, { client, db })
@@ -351,6 +372,12 @@ client.on("interactionCreate", async (interaction) => {
           : false;
       if (handledByRequests) return;
 
+      const handledByStaffPanels =
+        staffPanels && typeof staffPanels.handleSelectMenu === "function"
+          ? await staffPanels.handleSelectMenu(interaction, { client, db })
+          : false;
+      if (handledByStaffPanels) return;
+
       const handledByPrivateVc =
         privateVc && typeof privateVc.handleSelectMenu === "function"
           ? await privateVc.handleSelectMenu(interaction, { client, db })
@@ -366,6 +393,12 @@ client.on("interactionCreate", async (interaction) => {
           ? await requests.handleModalSubmit(interaction, { client, db })
           : false;
       if (handledByRequests) return;
+
+      const handledByStaffPanels =
+        staffPanels && typeof staffPanels.handleModalSubmit === "function"
+          ? await staffPanels.handleModalSubmit(interaction, { client, db })
+          : false;
+      if (handledByStaffPanels) return;
 
       const handledByFortnite =
         fortniteQueue && typeof fortniteQueue.handleModalSubmit === "function"

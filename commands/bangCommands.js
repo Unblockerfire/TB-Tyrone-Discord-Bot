@@ -31,7 +31,8 @@ const COMMAND_GROUPS = [
   {
     title: "Staff / Owner",
     commands: [
-      { usage: "!tyrone-cleanup", detail: "Archive Tyrone conversation history from the current channel." }
+      { usage: "/tyrone-cleanup-setup", detail: "Post the Tyrone cleanup button panel." },
+      { usage: "/checklist-setup", detail: "Post the live staff checklist panel." }
     ]
   }
 ];

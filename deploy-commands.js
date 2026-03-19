@@ -129,6 +129,14 @@ const commands = [
     .setName("setup-requests")
     .setDescription("Post the Tyrone request/help panel (staff/admin only)"),
 
+  new SlashCommandBuilder()
+    .setName("tyrone-cleanup-setup")
+    .setDescription("Post the Tyrone cleanup button panel"),
+
+  new SlashCommandBuilder()
+    .setName("checklist-setup")
+    .setDescription("Post the live staff checklist panel"),
+
   // -------- LEADERBOARD --------
   new SlashCommandBuilder()
     .setName("setup-leaderboard")

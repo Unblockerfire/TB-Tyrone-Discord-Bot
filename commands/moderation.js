@@ -18,6 +18,7 @@ const TYRONE_CLEANUP_ROLE_IDS = [
   "1113158001604427966",
   "1112945506549768302"
 ];
+const TYRONE_CLEANUP_PANEL_CHANNEL_ID = "1477817040931782707";
 
 // ---------- LOCAL HELPERS ----------
 
@@ -144,124 +145,112 @@ async function handleMessage(message, { client }) {
 
     const content = (message.content || "").trim().toLowerCase();
 
-    // Only handle the cleanup command here
     if (content !== "!tyrone-cleanup") return;
-
-    // Role check
-    if (!userHasAnyRole(message.member, TYRONE_CLEANUP_ROLE_IDS)) {
-      await message.reply("You do not have permission to run `!tyrone-cleanup`.");
-      return;
-    }
-
-    const guild = message.guild;
-    if (!guild) {
-      await message.reply("This command can only be used in a server.");
-      return;
-    }
-
-    const archiveChannel = await guild.channels
-      .fetch(TYRONE_CLEANUP_ARCHIVE_CHANNEL_ID)
-      .catch(() => null);
-
-    if (!archiveChannel || !archiveChannel.isTextBased()) {
-      await message.reply(
-        "Cleanup archive channel is invalid or missing. Please check the config."
-      );
-      return;
-    }
-
-    const tyroneId = client.user.id;
-
-    // Fetch messages from the channel where the command was run
-    const sourceChannel = message.channel;
-    let allFetched = [];
-    let lastId = undefined;
-
-    // Up to ~500 messages back
-    while (true) {
-      const batch = await sourceChannel.messages
-        .fetch({ limit: 100, before: lastId })
-        .catch(() => null);
-
-      if (!batch || batch.size === 0) break;
-
-      allFetched.push(...batch.values());
-      lastId = batch.last().id;
-
-      if (allFetched.length >= 500) break;
-    }
-
-    // Filter messages "from or to" Tyrone
-    const filtered = allFetched.filter(m => {
-      if (m.id === message.id) return false; // do not archive the command itself
-
-      const lower = (m.content || "").toLowerCase();
-      const mentionsTyrone = m.mentions?.users?.has(tyroneId) || false;
-      const isTyrone = m.author.id === tyroneId;
-      const startsWithCommand = lower.startsWith("!tyrone");
-
-      return isTyrone || mentionsTyrone || startsWithCommand;
-    });
-
-    if (filtered.length === 0) {
-      await message.reply("There are no Tyrone messages to clean up in this channel.");
-      return;
-    }
-
-    // Sort oldest → newest
-    filtered.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
-
-    const toMessages = filtered.filter(m => m.author.id !== tyroneId);
-    const fromMessages = filtered.filter(m => m.author.id === tyroneId);
-
-    const pairsCount = Math.max(toMessages.length, fromMessages.length);
-    const lines = [];
-
-    lines.push(`Summary for #${sourceChannel.name}:`);
-    lines.push(`Messages To: ${toMessages.length}`);
-    lines.push(`Messages Out: ${fromMessages.length}`);
-    lines.push("");
-
-    for (let i = 0; i < pairsCount; i++) {
-      const userMsg = toMessages[i];
-      const botMsg = fromMessages[i];
-
-      if (userMsg) {
-        lines.push(
-          `**${userMsg.author.tag}**: ${userMsg.content || "(no content)"}`
-        );
-      }
-      if (botMsg) {
-        lines.push(`**Tyrone**: ${botMsg.content || "(no content)"}`);
-      }
-      if (userMsg || botMsg) {
-        lines.push(""); // blank line between convo chunks
-      }
-    }
-
-    let text = lines.join("\n");
-    if (text.length > 1950) {
-      text = text.slice(0, 1950) + "\n...(truncated)";
-    }
-
-    await archiveChannel.send({ content: text });
-
-    // Delete the original messages (best effort, ignores >14 day old automatically)
-    try {
-      await sourceChannel.bulkDelete(filtered, true);
-    } catch (err) {
-      console.error("[Tyrone cleanup] bulkDelete error:", err);
-    }
-
-    // Delete the command message too if it still exists
-    try {
-      await message.delete().catch(() => {});
-    } catch {
-      // ignore
-    }
+    await message.reply(
+      `Use **/tyrone-cleanup-setup** in <#${TYRONE_CLEANUP_PANEL_CHANNEL_ID}> and click the cleanup button instead.`
+    );
   } catch (err) {
     console.error("[Tyrone cleanup] handleMessage error:", err);
   }
+}
+
+async function runTyroneCleanup({ client, guild, sourceChannel, skipMessageId = null }) {
+  if (!guild) {
+    return { ok: false, error: "This command can only be used in a server." };
+  }
+
+  if (!sourceChannel?.isTextBased?.()) {
+    return { ok: false, error: "Cleanup only works in a text channel." };
+  }
+
+  const archiveChannel = await guild.channels
+    .fetch(TYRONE_CLEANUP_ARCHIVE_CHANNEL_ID)
+    .catch(() => null);
+
+  if (!archiveChannel || !archiveChannel.isTextBased()) {
+    return {
+      ok: false,
+      error: "Cleanup archive channel is invalid or missing. Please check the config."
+    };
+  }
+
+  const tyroneId = client.user.id;
+  let allFetched = [];
+  let lastId = undefined;
+
+  while (true) {
+    const batch = await sourceChannel.messages
+      .fetch({ limit: 100, before: lastId })
+      .catch(() => null);
+
+    if (!batch || batch.size === 0) break;
+
+    allFetched.push(...batch.values());
+    lastId = batch.last().id;
+
+    if (allFetched.length >= 500) break;
+  }
+
+  const filtered = allFetched.filter(m => {
+    if (skipMessageId && m.id === skipMessageId) return false;
+
+    const lower = (m.content || "").toLowerCase();
+    const mentionsTyrone = m.mentions?.users?.has(tyroneId) || false;
+    const isTyrone = m.author.id === tyroneId;
+    const startsWithCommand = lower.startsWith("!tyrone");
+
+    return isTyrone || mentionsTyrone || startsWithCommand;
+  });
+
+  if (filtered.length === 0) {
+    return { ok: false, error: "There are no Tyrone messages to clean up in this channel." };
+  }
+
+  filtered.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+
+  const toMessages = filtered.filter(m => m.author.id !== tyroneId);
+  const fromMessages = filtered.filter(m => m.author.id === tyroneId);
+  const pairsCount = Math.max(toMessages.length, fromMessages.length);
+  const lines = [];
+
+  lines.push(`Summary for #${sourceChannel.name}:`);
+  lines.push(`Messages To: ${toMessages.length}`);
+  lines.push(`Messages Out: ${fromMessages.length}`);
+  lines.push("");
+
+  for (let i = 0; i < pairsCount; i++) {
+    const userMsg = toMessages[i];
+    const botMsg = fromMessages[i];
+
+    if (userMsg) {
+      lines.push(`**${userMsg.author.tag}**: ${userMsg.content || "(no content)"}`);
+    }
+    if (botMsg) {
+      lines.push(`**Tyrone**: ${botMsg.content || "(no content)"}`);
+    }
+    if (userMsg || botMsg) {
+      lines.push("");
+    }
+  }
+
+  let text = lines.join("\n");
+  if (text.length > 1950) {
+    text = text.slice(0, 1950) + "\n...(truncated)";
+  }
+
+  await archiveChannel.send({ content: text });
+
+  try {
+    await sourceChannel.bulkDelete(filtered, true);
+  } catch (err) {
+    console.error("[Tyrone cleanup] bulkDelete error:", err);
+  }
+
+  return {
+    ok: true,
+    deletedCount: filtered.length,
+    archivedTo: archiveChannel.id
+  };
 }
 
 // ---------- /warn IMPLEMENTATION ----------
@@ -808,7 +797,10 @@ async function handleKickButtons(interaction) {
 module.exports = {
   handleInteraction,
   handleButton,
-  handleMessage
+  handleMessage,
+  runTyroneCleanup,
+  TYRONE_CLEANUP_PANEL_CHANNEL_ID,
+  TYRONE_CLEANUP_ROLE_IDS
 };
 
 
