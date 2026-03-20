@@ -58,7 +58,7 @@ function buildCleanupEmbed() {
     .setColor(0xc0392b)
     .setTitle("Tyrone Cleanup")
     .setDescription(
-      "Use the button below to archive and remove Tyrone conversation messages from this channel."
+      "Use the button below to archive and remove Tyrone conversation messages across the server."
     );
 }
 
@@ -278,13 +278,13 @@ async function handleButton(interaction, { client, db }) {
     const result = await moderation.runTyroneCleanup({
       client,
       guild: interaction.guild,
-      sourceChannel: interaction.channel,
+      sourceChannel: null,
       skipMessageId: interaction.message?.id || null
     });
 
     await interaction.editReply(
       result.ok
-        ? `Cleanup complete ✅ Archived to <#${result.archivedTo}> and deleted ${result.deletedCount} message(s).`
+        ? `Cleanup complete ✅ Archived to <#${result.archivedTo}> and deleted ${result.deletedCount} message(s) across ${result.channelsTouched} channel(s).`
         : (result.error || "Cleanup failed.")
     );
     return true;

@@ -6,6 +6,7 @@ const {
   Client,
   GatewayIntentBits,
   Partials,
+  PermissionsBitField,
   MessageFlags
 } = require("discord.js");
 
@@ -28,25 +29,63 @@ const staffPanels = require("./commands/staffPanels");
 
 const MEE6_BOT_ID = "159985870458322944";
 const MEE6_ACHIEVEMENT_FORWARD_CHANNEL_ID = "1478930416097562728";
+const MEE6_FORWARD_CONFIRM_MS = 2 * 60 * 1000;
+const MEE6_FORWARD_YES_PREFIX = "mee6_forward_yes";
+const MEE6_FORWARD_NO_PREFIX = "mee6_forward_no";
+const mee6PendingForwards = new Map();
+
+function getMee6ControlRoleIds() {
+  return [
+    "1113158001604427966",
+    process.env.STAFF_ROLE_ID || "",
+    process.env.ADMIN_ROLE_ID || "",
+    ...(process.env.TICKET_CLAIM_ROLE_IDS || "").split(",").map(value => value.trim())
+  ].filter(Boolean);
+}
+
+function canManageMee6Forward(member) {
+  if (!member) return false;
+  if (member.permissions?.has?.(PermissionsBitField.Flags.ManageChannels)) return true;
+  if (member.permissions?.has?.(PermissionsBitField.Flags.ManageMessages)) return true;
+  return getMee6ControlRoleIds().some(roleId => member.roles?.cache?.has(roleId));
+}
+
+function extractMee6Text(message) {
+  return [
+    message.content || "",
+    ...(message.embeds || []).flatMap(embed => [
+      embed.author?.name || "",
+      embed.title || "",
+      embed.description || "",
+      embed.footer?.text || ""
+    ])
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
 
 function isMee6AchievementMessage(message) {
   if (!message || message.author?.id !== MEE6_BOT_ID) return false;
 
-  const content = String(message.content || "").trim();
-  if (/unlocked the achievement/i.test(content)) return true;
+  const text = extractMee6Text(message).toLowerCase();
+  if (!text) return false;
 
-  const embedText = (message.embeds || [])
-    .map(embed => [embed.title, embed.description]
-      .filter(Boolean)
-      .join(" "))
-    .join(" ");
-
-  return /unlocked the achievement/i.test(embedText);
+  return (
+    text.includes("achievement") ||
+    text.includes("unlocked the achievement") ||
+    text.includes("progress") ||
+    text.includes("almost there") ||
+    text.includes("you've reached") ||
+    text.includes("you’ve reached") ||
+    text.includes("level up") ||
+    text.includes("leveled up") ||
+    text.includes("next level") ||
+    text.includes("%")
+  );
 }
 
-async function forwardMee6Achievement(message, client) {
-  if (!isMee6AchievementMessage(message)) return false;
-
+async function sendMee6ForwardTarget(message, client) {
   const targetChannel = await client.channels
     .fetch(MEE6_ACHIEVEMENT_FORWARD_CHANNEL_ID)
     .catch(() => null);
@@ -59,10 +98,7 @@ async function forwardMee6Achievement(message, client) {
     return false;
   }
 
-  const embedParts = (message.embeds || [])
-    .map(embed => [embed.title, embed.description].filter(Boolean).join("\n"))
-    .filter(Boolean);
-  const forwardContent = [message.content, ...embedParts].filter(Boolean).join("\n\n").trim();
+  const forwardContent = extractMee6Text(message);
 
   if (!forwardContent) {
     console.warn("[MEE6] Matched achievement message had no forwardable content.");
@@ -70,14 +106,95 @@ async function forwardMee6Achievement(message, client) {
   }
 
   await targetChannel.send(forwardContent);
-  await message.delete().catch(error => {
-    console.error("[MEE6] Failed to delete original achievement message:", error);
+  return true;
+}
+
+async function resolveMee6Forward(client, sourceMessageId, shouldForward, reason = "manual") {
+  const pending = mee6PendingForwards.get(sourceMessageId);
+  if (!pending) return false;
+
+  mee6PendingForwards.delete(sourceMessageId);
+  if (pending.timeout) {
+    clearTimeout(pending.timeout);
+  }
+
+  const sourceChannel = await client.channels.fetch(pending.sourceChannelId).catch(() => null);
+  const promptChannel = await client.channels.fetch(pending.promptChannelId).catch(() => null);
+  const sourceMessage = sourceChannel?.messages
+    ? await sourceChannel.messages.fetch(sourceMessageId).catch(() => null)
+    : null;
+  const promptMessage = promptChannel?.messages
+    ? await promptChannel.messages.fetch(pending.promptMessageId).catch(() => null)
+    : null;
+
+  if (shouldForward && sourceMessage) {
+    const forwarded = await sendMee6ForwardTarget(sourceMessage, client);
+    if (forwarded) {
+      await sourceMessage.delete().catch(error => {
+        console.error("[MEE6] Failed to delete original achievement message:", error);
+      });
+      console.log(
+        "[MEE6] Forwarded achievement message",
+        JSON.stringify({
+          source_channel_id: sourceMessage.channelId,
+          target_channel_id: MEE6_ACHIEVEMENT_FORWARD_CHANNEL_ID,
+          message_id: sourceMessage.id,
+          reason
+        })
+      );
+    }
+  }
+
+  if (promptMessage) {
+    await promptMessage.delete().catch(() => null);
+  }
+
+  return true;
+}
+
+async function queueMee6ForwardPrompt(message, client) {
+  if (!isMee6AchievementMessage(message)) return false;
+
+  const prompt = await message.channel.send({
+    content: "Forward this message?",
+    components: [
+      {
+        type: 1,
+        components: [
+          {
+            type: 2,
+            style: 3,
+            label: "Yes",
+            custom_id: `${MEE6_FORWARD_YES_PREFIX}:${message.id}`
+          },
+          {
+            type: 2,
+            style: 4,
+            label: "No",
+            custom_id: `${MEE6_FORWARD_NO_PREFIX}:${message.id}`
+          }
+        ]
+      }
+    ]
   });
+
+  const timeout = setTimeout(() => {
+    resolveMee6Forward(client, message.id, true, "timeout").catch(err => {
+      console.error("[MEE6] Timed forward failed:", err);
+    });
+  }, MEE6_FORWARD_CONFIRM_MS);
+
+  mee6PendingForwards.set(message.id, {
+    sourceChannelId: message.channelId,
+    promptChannelId: prompt.channelId,
+    promptMessageId: prompt.id,
+    timeout
+  });
+
   console.log(
-    "[MEE6] Forwarded achievement message",
+    "[MEE6] Prompted for forward",
     JSON.stringify({
       source_channel_id: message.channelId,
-      target_channel_id: MEE6_ACHIEVEMENT_FORWARD_CHANNEL_ID,
       message_id: message.id
     })
   );
@@ -308,6 +425,29 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     if (interaction.isButton()) {
+      const mee6Match = String(interaction.customId || "").match(
+        /^(mee6_forward_yes|mee6_forward_no):(\d+)$/
+      );
+      if (mee6Match) {
+        const [, action, sourceMessageId] = mee6Match;
+        if (!canManageMee6Forward(interaction.member)) {
+          await interaction.reply({
+            content: "You do not have permission to manage MEE6 forwarding.",
+            flags: MessageFlags.Ephemeral
+          });
+          return;
+        }
+
+        await interaction.deferUpdate();
+        await resolveMee6Forward(
+          client,
+          sourceMessageId,
+          action === MEE6_FORWARD_YES_PREFIX,
+          action === MEE6_FORWARD_YES_PREFIX ? "manual_yes" : "manual_no"
+        );
+        return;
+      }
+
       const handledByModeration =
         moderation && typeof moderation.handleButton === "function"
           ? await moderation.handleButton(interaction, { client, db })
@@ -439,7 +579,7 @@ client.on("interactionCreate", async (interaction) => {
 // ---------- MESSAGE ROUTER ----------
 client.on("messageCreate", async (message) => {
   try {
-    const handledMee6Achievement = await forwardMee6Achievement(message, client);
+    const handledMee6Achievement = await queueMee6ForwardPrompt(message, client);
     if (handledMee6Achievement) return;
 
     if (message.author.bot) return;
