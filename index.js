@@ -87,13 +87,27 @@ async function sendMee6ForwardTarget(message, client) {
   }
 
   const forwardContent = extractMee6Text(message);
+  const forwardedEmbeds = Array.from(message.embeds || [])
+    .map(embed => {
+      try {
+        return typeof embed?.toJSON === "function" ? embed.toJSON() : embed?.data || null;
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean)
+    .slice(0, 10);
 
-  if (!forwardContent) {
+  if (!forwardContent && !forwardedEmbeds.length) {
     console.warn("[MEE6] Matched achievement message had no forwardable content.");
     return false;
   }
 
-  await targetChannel.send(forwardContent);
+  const label = "Forwarded message from MEE6:";
+  await targetChannel.send({
+    content: forwardContent ? `${label}\n${forwardContent}` : label,
+    embeds: forwardedEmbeds
+  });
   return true;
 }
 
