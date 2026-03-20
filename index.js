@@ -32,6 +32,7 @@ const MEE6_ACHIEVEMENT_FORWARD_CHANNEL_ID = "1478930416097562728";
 const MEE6_FORWARD_CONFIRM_MS = 2 * 60 * 1000;
 const MEE6_FORWARD_YES_PREFIX = "mee6_forward_yes";
 const MEE6_FORWARD_NO_PREFIX = "mee6_forward_no";
+const MEE6_FORWARD_DELETE_PREFIX = "mee6_forward_delete";
 const mee6PendingForwards = new Map();
 
 function getMee6ControlRoleIds() {
@@ -95,7 +96,7 @@ async function sendMee6ForwardTarget(message, client) {
   return true;
 }
 
-async function resolveMee6Forward(client, sourceMessageId, shouldForward, reason = "manual") {
+async function resolveMee6Forward(client, sourceMessageId, action = "forward", reason = "manual") {
   const pending = mee6PendingForwards.get(sourceMessageId);
   if (!pending) return false;
 
@@ -113,7 +114,7 @@ async function resolveMee6Forward(client, sourceMessageId, shouldForward, reason
     ? await promptChannel.messages.fetch(pending.promptMessageId).catch(() => null)
     : null;
 
-  if (shouldForward && sourceMessage) {
+  if (action === "forward" && sourceMessage) {
     const forwarded = await sendMee6ForwardTarget(sourceMessage, client);
     if (forwarded) {
       await sourceMessage.delete().catch(error => {
@@ -129,6 +130,20 @@ async function resolveMee6Forward(client, sourceMessageId, shouldForward, reason
         })
       );
     }
+  }
+
+  if (action === "delete" && sourceMessage) {
+    await sourceMessage.delete().catch(error => {
+      console.error("[MEE6] Failed to delete original achievement message:", error);
+    });
+    console.log(
+      "[MEE6] Deleted source message without forwarding",
+      JSON.stringify({
+        source_channel_id: sourceMessage.channelId,
+        message_id: sourceMessage.id,
+        reason
+      })
+    );
   }
 
   if (promptMessage) {
@@ -158,6 +173,12 @@ async function queueMee6ForwardPrompt(message, client) {
             style: 4,
             label: "No",
             custom_id: `${MEE6_FORWARD_NO_PREFIX}:${message.id}`
+          },
+          {
+            type: 2,
+            style: 2,
+            label: "Delete",
+            custom_id: `${MEE6_FORWARD_DELETE_PREFIX}:${message.id}`
           }
         ]
       }
@@ -165,7 +186,7 @@ async function queueMee6ForwardPrompt(message, client) {
   });
 
   const timeout = setTimeout(() => {
-    resolveMee6Forward(client, message.id, true, "timeout").catch(err => {
+    resolveMee6Forward(client, message.id, "forward", "timeout").catch(err => {
       console.error("[MEE6] Timed forward failed:", err);
     });
   }, MEE6_FORWARD_CONFIRM_MS);
@@ -412,7 +433,7 @@ client.on("interactionCreate", async (interaction) => {
 
     if (interaction.isButton()) {
       const mee6Match = String(interaction.customId || "").match(
-        /^(mee6_forward_yes|mee6_forward_no):(\d+)$/
+        /^(mee6_forward_yes|mee6_forward_no|mee6_forward_delete):(\d+)$/
       );
       if (mee6Match) {
         const [, action, sourceMessageId] = mee6Match;
@@ -428,8 +449,16 @@ client.on("interactionCreate", async (interaction) => {
         await resolveMee6Forward(
           client,
           sourceMessageId,
-          action === MEE6_FORWARD_YES_PREFIX,
-          action === MEE6_FORWARD_YES_PREFIX ? "manual_yes" : "manual_no"
+          action === MEE6_FORWARD_YES_PREFIX
+            ? "forward"
+            : action === MEE6_FORWARD_DELETE_PREFIX
+              ? "delete"
+              : "skip",
+          action === MEE6_FORWARD_YES_PREFIX
+            ? "manual_yes"
+            : action === MEE6_FORWARD_DELETE_PREFIX
+              ? "manual_delete"
+              : "manual_no"
         );
         return;
       }
