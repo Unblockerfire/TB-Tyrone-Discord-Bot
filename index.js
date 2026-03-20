@@ -65,24 +65,10 @@ function extractMee6Text(message) {
     .trim();
 }
 
-function isMee6AchievementMessage(message) {
+function shouldPromptMee6Forward(message) {
   if (!message || message.author?.id !== MEE6_BOT_ID) return false;
-
-  const text = extractMee6Text(message).toLowerCase();
-  if (!text) return false;
-
-  return (
-    text.includes("achievement") ||
-    text.includes("unlocked the achievement") ||
-    text.includes("progress") ||
-    text.includes("almost there") ||
-    text.includes("you've reached") ||
-    text.includes("you’ve reached") ||
-    text.includes("level up") ||
-    text.includes("leveled up") ||
-    text.includes("next level") ||
-    text.includes("%")
-  );
+  if (message.channelId === MEE6_ACHIEVEMENT_FORWARD_CHANNEL_ID) return false;
+  return true;
 }
 
 async function sendMee6ForwardTarget(message, client) {
@@ -153,7 +139,7 @@ async function resolveMee6Forward(client, sourceMessageId, shouldForward, reason
 }
 
 async function queueMee6ForwardPrompt(message, client) {
-  if (!isMee6AchievementMessage(message)) return false;
+  if (!shouldPromptMee6Forward(message)) return false;
 
   const prompt = await message.channel.send({
     content: "Forward this message?",
