@@ -68,6 +68,14 @@ db.prepare(`
 `).run();
 
 db.prepare(`
+  CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  )
+`).run();
+
+db.prepare(`
   CREATE TABLE IF NOT EXISTS tyrone_faq (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     label TEXT,
@@ -391,6 +399,25 @@ const listTyroneSettingsStmt = db.prepare(`
 
 const upsertTyroneSettingStmt = db.prepare(`
   INSERT INTO tyrone_settings (key, value, updated_at)
+  VALUES (@key, @value, @updated_at)
+  ON CONFLICT(key) DO UPDATE SET
+    value = excluded.value,
+    updated_at = excluded.updated_at
+`);
+
+const getAppSettingStmt = db.prepare(`
+  SELECT key, value, updated_at
+  FROM app_settings
+  WHERE key = ?
+`);
+
+const listAppSettingsStmt = db.prepare(`
+  SELECT key, value, updated_at
+  FROM app_settings
+`);
+
+const upsertAppSettingStmt = db.prepare(`
+  INSERT INTO app_settings (key, value, updated_at)
   VALUES (@key, @value, @updated_at)
   ON CONFLICT(key) DO UPDATE SET
     value = excluded.value,
@@ -1101,6 +1128,43 @@ function setManyTyroneSettings(entries) {
 
   tx(entries);
   return listTyroneSettings();
+}
+
+function getAppSetting(key) {
+  return getAppSettingStmt.get(key) || null;
+}
+
+function listAppSettings() {
+  return listAppSettingsStmt.all();
+}
+
+function setAppSetting(key, value) {
+  const now = Date.now();
+  const stored =
+    typeof value === "string"
+      ? value
+      : JSON.stringify(value);
+
+  upsertAppSettingStmt.run({
+    key: String(key),
+    value: stored,
+    updated_at: now
+  });
+
+  return getAppSetting(key);
+}
+
+function setManyAppSettings(entries) {
+  if (!entries || typeof entries !== "object") return [];
+
+  const tx = db.transaction((obj) => {
+    for (const [key, value] of Object.entries(obj)) {
+      setAppSetting(key, value);
+    }
+  });
+
+  tx(entries);
+  return listAppSettings();
 }
 
 function listTyroneFaq() {
@@ -1914,6 +1978,10 @@ module.exports = {
   listTyroneSettings,
   setTyroneSetting,
   setManyTyroneSettings,
+  getAppSetting,
+  listAppSettings,
+  setAppSetting,
+  setManyAppSettings,
   listTyroneFaq,
   getTyroneFaqById,
   createTyroneFaq,

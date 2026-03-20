@@ -26,6 +26,7 @@ const privateVc = require("./commands/privateVc");
 const bangCommands = require("./commands/bangCommands");
 const requests = require("./commands/requests");
 const staffPanels = require("./commands/staffPanels");
+const communityPosts = require("./commands/communityPosts");
 
 const MEE6_BOT_ID = "159985870458322944";
 const MEE6_ACHIEVEMENT_FORWARD_CHANNEL_ID = "1478930416097562728";
@@ -332,6 +333,15 @@ client.once("clientReady", () => {
   } catch (err) {
     console.error("[Checklist] Failed to start ticker:", err);
   }
+
+  try {
+    if (communityPosts && typeof communityPosts.startDailyInspireTicker === "function") {
+      communityPosts.startDailyInspireTicker(client, db);
+      console.log("[Inspire] Daily scheduler started ✅");
+    }
+  } catch (err) {
+    console.error("[Inspire] Failed to start daily scheduler:", err);
+  }
 });
 
 // ---------- INTERACTION ROUTER ----------
@@ -381,6 +391,11 @@ client.on("interactionCreate", async (interaction) => {
 
         case "setup-requests":
           await requests.handleInteraction(interaction, { client, db });
+          return;
+
+        case "setup-inspire":
+        case "setup-shoutout":
+          await communityPosts.handleInteraction(interaction, { client, db });
           return;
 
         case "tyrone-cleanup-setup":
@@ -560,6 +575,12 @@ client.on("interactionCreate", async (interaction) => {
           ? await fortniteQueue.handleModalSubmit(interaction, { client, db })
           : false;
       if (handledByFortnite) return;
+
+      const handledByCommunity =
+        communityPosts && typeof communityPosts.handleModalSubmit === "function"
+          ? await communityPosts.handleModalSubmit(interaction, { client, db })
+          : false;
+      if (handledByCommunity) return;
 
       return;
     }

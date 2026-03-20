@@ -130,6 +130,44 @@ const commands = [
     .setDescription("Post the Tyrone request/help panel (staff/admin only)"),
 
   new SlashCommandBuilder()
+    .setName("setup-inspire")
+    .setDescription("Configure the daily inspire post channel")
+    .addChannelOption(option =>
+      option
+        .setName("channel")
+        .setDescription("Channel for the daily inspire post")
+        .setRequired(false)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("setup-shoutout")
+    .setDescription("Configure and post the Shoutout of the Day")
+    .addChannelOption(option =>
+      option
+        .setName("channel")
+        .setDescription("Optional shoutout channel to store for future posts")
+        .setRequired(false)
+    )
+    .addUserOption(option =>
+      option
+        .setName("user")
+        .setDescription("First user to shout out")
+        .setRequired(false)
+    )
+    .addUserOption(option =>
+      option
+        .setName("user_2")
+        .setDescription("Second user to shout out")
+        .setRequired(false)
+    )
+    .addUserOption(option =>
+      option
+        .setName("user_3")
+        .setDescription("Third user to shout out")
+        .setRequired(false)
+    ),
+
+  new SlashCommandBuilder()
     .setName("tyrone-cleanup-setup")
     .setDescription("Post the Tyrone cleanup button panel"),
 
