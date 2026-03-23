@@ -3,7 +3,8 @@ const {
   EmbedBuilder,
   ActionRowBuilder,
   ButtonBuilder,
-  ButtonStyle
+  ButtonStyle,
+  PermissionsBitField
 } = require("discord.js");
 
 // ---------- TEMP DISPUTE STORAGE ----------
@@ -19,6 +20,9 @@ const TYRONE_CLEANUP_ROLE_IDS = [
   "1112945506549768302"
 ];
 const TYRONE_CLEANUP_PANEL_CHANNEL_ID = "1477817040931782707";
+const TIMEOUT_TRACK_ROLE_ID = "1113813941852831845";
+const TIMEOUT_LOG_CHANNEL_ID = "1113814028385529888";
+const MAX_TIMEOUT_MS = 28 * 24 * 60 * 60 * 1000;
 
 // ---------- LOCAL HELPERS ----------
 
@@ -81,6 +85,175 @@ function userHasRole(member, roleId) {
 
 function userHasAnyRole(member, roleIds) {
   return roleIds.some(id => member?.roles?.cache?.has(id));
+}
+
+function canUseTimeout(member) {
+  if (!member) return false;
+  if (member.permissions?.has?.(PermissionsBitField.Flags.ModerateMembers)) return true;
+  if (member.permissions?.has?.(PermissionsBitField.Flags.ManageGuild)) return true;
+
+  const allowedRoleIds = [
+    process.env.STAFF_ROLE_ID || "",
+    process.env.ADMIN_ROLE_ID || "",
+    "1113158001604427966"
+  ].filter(Boolean);
+
+  return userHasAnyRole(member, allowedRoleIds);
+}
+
+function parseTimeoutDuration(input) {
+  const raw = String(input || "").trim().toLowerCase();
+  if (!raw) return 0;
+
+  const unitMap = {
+    s: 1000,
+    sec: 1000,
+    secs: 1000,
+    second: 1000,
+    seconds: 1000,
+    m: 60 * 1000,
+    min: 60 * 1000,
+    mins: 60 * 1000,
+    minute: 60 * 1000,
+    minutes: 60 * 1000,
+    h: 60 * 60 * 1000,
+    hr: 60 * 60 * 1000,
+    hrs: 60 * 60 * 1000,
+    hour: 60 * 60 * 1000,
+    hours: 60 * 60 * 1000,
+    d: 24 * 60 * 60 * 1000,
+    day: 24 * 60 * 60 * 1000,
+    days: 24 * 60 * 60 * 1000,
+    w: 7 * 24 * 60 * 60 * 1000,
+    week: 7 * 24 * 60 * 60 * 1000,
+    weeks: 7 * 24 * 60 * 60 * 1000
+  };
+
+  let total = 0;
+  let matched = false;
+  const regex = /(\d+)\s*(s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|week|weeks)\b/g;
+  let match = null;
+
+  while ((match = regex.exec(raw))) {
+    matched = true;
+    total += Number(match[1]) * unitMap[match[2]];
+  }
+
+  if (!matched && /^\d+$/.test(raw)) {
+    total = Number(raw) * 60 * 1000;
+    matched = true;
+  }
+
+  if (!matched) return 0;
+  return Math.min(total, MAX_TIMEOUT_MS);
+}
+
+function formatDuration(ms) {
+  const totalSeconds = Math.max(0, Math.floor(Number(ms || 0) / 1000));
+  const units = [
+    ["day", 86400],
+    ["hour", 3600],
+    ["minute", 60],
+    ["second", 1]
+  ];
+
+  let remaining = totalSeconds;
+  const parts = [];
+  for (const [label, size] of units) {
+    if (remaining < size && parts.length === 0 && label !== "second") continue;
+    const value = Math.floor(remaining / size);
+    if (!value && label !== "second") continue;
+    remaining -= value * size;
+    if (value || label === "second" && parts.length === 0) {
+      parts.push(`${value} ${label}${value === 1 ? "" : "s"}`);
+    }
+    if (parts.length === 2) break;
+  }
+
+  return parts.join(" ");
+}
+
+function formatOrdinal(value) {
+  const number = Number(value || 0);
+  const mod10 = number % 10;
+  const mod100 = number % 100;
+  if (mod10 === 1 && mod100 !== 11) return `${number}st`;
+  if (mod10 === 2 && mod100 !== 12) return `${number}nd`;
+  if (mod10 === 3 && mod100 !== 13) return `${number}rd`;
+  return `${number}th`;
+}
+
+async function scheduleTimeoutRoleRemoval(guild, memberId, roleId, expiresAt) {
+  const remaining = Math.max(0, Number(expiresAt || 0) - Date.now());
+  if (!remaining) return;
+
+  const nextDelay = Math.min(remaining, 12 * 60 * 60 * 1000);
+  setTimeout(async () => {
+    try {
+      const freshMember = await guild.members.fetch(memberId).catch(() => null);
+      if (!freshMember) return;
+
+      const disabledUntil = Number(freshMember.communicationDisabledUntilTimestamp || 0);
+      if (disabledUntil > Date.now() + 5000) {
+        scheduleTimeoutRoleRemoval(guild, memberId, roleId, disabledUntil);
+        return;
+      }
+
+      if (freshMember.roles.cache.has(roleId)) {
+        await freshMember.roles.remove(roleId, "Timeout expired");
+      }
+    } catch (error) {
+      console.error("[Timeout] Failed to remove timeout role:", error);
+    }
+  }, nextDelay);
+}
+
+async function addTimeoutRole(member, expiresAt) {
+  const me = member.guild.members.me || (await member.guild.members.fetchMe().catch(() => null));
+  if (!me) {
+    return { ok: false, error: "I could not resolve my member state." };
+  }
+
+  if (!me.permissions.has(PermissionsBitField.Flags.ManageRoles)) {
+    return { ok: false, error: "I need Manage Roles to apply the timeout tracking role." };
+  }
+
+  const role = await member.guild.roles.fetch(TIMEOUT_TRACK_ROLE_ID).catch(() => null);
+  if (!role) {
+    return { ok: false, error: `Timeout role ${TIMEOUT_TRACK_ROLE_ID} was not found.` };
+  }
+
+  if (me.roles.highest.comparePositionTo(role) <= 0) {
+    return { ok: false, error: "My highest role must be above the timeout tracking role." };
+  }
+
+  await member.roles.add(role, "Timed out by staff");
+  scheduleTimeoutRoleRemoval(member.guild, member.id, role.id, expiresAt);
+  return { ok: true, role };
+}
+
+async function postTimeoutLog(guild, payload) {
+  const logChannel = await guild.channels.fetch(TIMEOUT_LOG_CHANNEL_ID).catch(() => null);
+  if (!logChannel?.isTextBased?.()) {
+    console.error("[Timeout] Log channel missing or invalid:", TIMEOUT_LOG_CHANNEL_ID);
+    return false;
+  }
+
+  const embed = new EmbedBuilder()
+    .setTitle("Tyrone Timeout")
+    .setColor(0xe67e22)
+    .addFields(
+      { name: "User", value: `<@${payload.targetUser.id}> (${payload.targetUser.id})`, inline: false },
+      { name: "Timed out by", value: `<@${payload.staffUser.id}>`, inline: true },
+      { name: "Offence Number", value: formatOrdinal(payload.offenceNumber), inline: true },
+      { name: "Time Total", value: payload.totalTimeText, inline: true },
+      { name: "Remaining Time", value: payload.remainingTimeText, inline: true },
+      { name: "Reason", value: payload.reason.slice(0, 1024), inline: false }
+    )
+    .setTimestamp(new Date());
+
+  await logChannel.send({ embeds: [embed] });
+  return true;
 }
 
 function isCleanupEligibleTyroneMessage(message, tyroneId) {
@@ -195,6 +368,10 @@ async function handleInteraction(interaction, { client, db }) {
 
   if (commandName === "warn") {
     return handleWarn(interaction, { client, db });
+  }
+
+  if (commandName === "timeout") {
+    return handleTimeout(interaction, { client, db });
   }
 
   if (commandName === "strikes") {
@@ -428,6 +605,88 @@ async function handleWarn(interaction, { db }) {
   } catch (err) {
     console.error("Punishment error:", err);
   }
+}
+
+async function handleTimeout(interaction, { db }) {
+  if (!interaction.inGuild()) {
+    return interaction.reply({
+      content: "This command can only be used in a server.",
+      ephemeral: true
+    });
+  }
+
+  if (!canUseTimeout(interaction.member)) {
+    return interaction.reply({
+      content: "You do not have permission to use /timeout.",
+      ephemeral: true
+    });
+  }
+
+  const targetUser = interaction.options.getUser("user", true);
+  const durationInput = interaction.options.getString("duration", true);
+  const reason = interaction.options.getString("reason", true);
+  const durationMs = parseTimeoutDuration(durationInput);
+
+  if (!durationMs) {
+    return interaction.reply({
+      content: "Use a valid duration like `10m`, `1h`, `2h 30m`, or `1d`.",
+      ephemeral: true
+    });
+  }
+
+  const targetMember = await interaction.guild.members.fetch(targetUser.id).catch(() => null);
+  if (!targetMember) {
+    return interaction.reply({
+      content: "I could not find that member in this server.",
+      ephemeral: true
+    });
+  }
+
+  const expiresAt = Date.now() + durationMs;
+  const stats = db.getUserStats(targetUser.id);
+  const offenceNumber = Number(stats.strikes || 0) + 1;
+
+  try {
+    await targetMember.timeout(durationMs, `${reason} | timed out by ${interaction.user.tag}`);
+  } catch (error) {
+    console.error("[Timeout] Failed to apply Discord timeout:", error);
+    return interaction.reply({
+      content: "I could not timeout that member. Check my Moderate Members permission and role position.",
+      ephemeral: true
+    });
+  }
+
+  db.setUserStats(targetUser.id, offenceNumber, Number(stats.warnings || 0) + 1);
+
+  const roleResult = await addTimeoutRole(targetMember, expiresAt).catch(error => ({
+    ok: false,
+    error: error.message
+  }));
+
+  await postTimeoutLog(interaction.guild, {
+    targetUser,
+    staffUser: interaction.user,
+    offenceNumber,
+    totalTimeText: formatDuration(durationMs),
+    remainingTimeText: formatDuration(expiresAt - Date.now()),
+    reason
+  }).catch(error => {
+    console.error("[Timeout] Failed to post timeout log:", error);
+  });
+
+  const roleNote = roleResult?.ok
+    ? ` and gave them <@&${TIMEOUT_TRACK_ROLE_ID}>`
+    : roleResult?.error
+      ? `, but I could not apply the timeout role: ${roleResult.error}`
+      : "";
+
+  return interaction.reply({
+    content:
+      `Timed out <@${targetUser.id}> for **${formatDuration(durationMs)}**${roleNote}.\n` +
+      `This is their **${formatOrdinal(offenceNumber)}** recorded offence.\n` +
+      `Reason: ${reason}`,
+    allowedMentions: { users: [targetUser.id], roles: roleResult?.ok ? [TIMEOUT_TRACK_ROLE_ID] : [] }
+  });
 }
 
 // ---------- /strikes IMPLEMENTATION ----------

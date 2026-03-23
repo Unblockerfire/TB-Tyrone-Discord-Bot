@@ -24,6 +24,22 @@ const commands = [
       option.setName("reason").setDescription("Reason for the warning").setRequired(true)
     ),
 
+  new SlashCommandBuilder()
+    .setName("timeout")
+    .setDescription("Timeout a user and log the offence")
+    .addUserOption(option =>
+      option.setName("user").setDescription("User to timeout").setRequired(true)
+    )
+    .addStringOption(option =>
+      option
+        .setName("duration")
+        .setDescription("Duration like 10m, 1h, 2h 30m, or 1d")
+        .setRequired(true)
+    )
+    .addStringOption(option =>
+      option.setName("reason").setDescription("Reason for the timeout").setRequired(true)
+    ),
+
   // -------- STRIKES --------
   new SlashCommandBuilder()
     .setName("strikes")
