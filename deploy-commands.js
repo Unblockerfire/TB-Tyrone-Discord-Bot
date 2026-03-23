@@ -147,13 +147,7 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName("setup-inspire")
-    .setDescription("Configure the daily inspire post channel")
-    .addChannelOption(option =>
-      option
-        .setName("channel")
-        .setDescription("Channel for the daily inspire post")
-        .setRequired(false)
-    ),
+    .setDescription("View the fixed daily inspire schedule info"),
 
   new SlashCommandBuilder()
     .setName("setup-shoutout")

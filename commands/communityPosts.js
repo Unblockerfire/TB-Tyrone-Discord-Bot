@@ -1,5 +1,4 @@
 const {
-  EmbedBuilder,
   MessageFlags,
   ModalBuilder,
   PermissionsBitField,
@@ -8,14 +7,10 @@ const {
   ActionRowBuilder
 } = require("discord.js");
 
-const fetch = (...args) =>
-  import("node-fetch").then(({ default: fetchImpl }) => fetchImpl(...args));
-
 const OWNER_ROLE_ID = "1113158001604427966";
 const SHOUTOUT_ROLE_ID = "1484176418693972019";
-const MOUNTAIN_TIME_ZONE = "America/Denver";
-const INSPIRE_CHANNEL_KEY = "daily_inspire.channel_id";
-const INSPIRE_GUILD_KEY = "daily_inspire.guild_id";
+const MOUNTAIN_TIME_ZONE = "America/Phoenix";
+const INSPIRE_CHANNEL_ID = "1113676783674462341";
 const INSPIRE_LAST_RUN_KEY = "daily_inspire.last_run_date";
 const SHOUTOUT_CHANNEL_KEY = "shoutout.channel_id";
 const SHOUTOUT_GUILD_KEY = "shoutout.guild_id";
@@ -75,70 +70,12 @@ function getMountainTimeParts(date = new Date()) {
   };
 }
 
-function buildInspireEmbed(imageUrl) {
-  return new EmbedBuilder()
-    .setColor(0x5dade2)
-    .setTitle("Daily Inspire")
-    .setDescription("Start the day with something fresh.")
-    .setImage(imageUrl)
-    .setFooter({ text: "Posted automatically by Tyrone at 6:00 AM Mountain Time." })
-    .setTimestamp(new Date());
-}
-
-async function fetchInspireImageUrl({ retries = 1 } = {}) {
-  let lastError = null;
-
-  for (let attempt = 1; attempt <= retries + 1; attempt += 1) {
-    try {
-      const response = await fetch("https://inspirobot.me/api?generate=true", {
-        method: "GET",
-        headers: {
-          "user-agent": "TB-Tyrone/1.0"
-        }
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-
-      const imageUrl = String(await response.text()).trim();
-      if (!/^https?:\/\/\S+\.(jpg|jpeg|png|webp)(\?.*)?$/i.test(imageUrl)) {
-        throw new Error(`Unexpected inspire payload: ${imageUrl.slice(0, 120)}`);
-      }
-
-      return imageUrl;
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  throw lastError || new Error("Unknown inspire fetch failure");
-}
-
 async function runDailyInspireIfDue(client, db, { force = false } = {}) {
   const time = getMountainTimeParts();
   const shouldRun = force || (time.hour === 6 && time.minute === 0);
   if (!shouldRun) return false;
 
-  const channelId = getSettingValue(db, INSPIRE_CHANNEL_KEY);
   const lastRunDate = getSettingValue(db, INSPIRE_LAST_RUN_KEY);
-
-  if (!channelId) {
-    console.log(
-      "[Inspire] Scheduler fired",
-      JSON.stringify({
-        force,
-        date_key: time.dateKey,
-        hour: time.hour,
-        minute: time.minute,
-        timezone: MOUNTAIN_TIME_ZONE,
-        channel_id: null,
-        last_run_date: lastRunDate || null,
-        skipped: "no_channel_configured"
-      })
-    );
-    return false;
-  }
 
   if (!force && lastRunDate === time.dateKey) {
     return false;
@@ -152,40 +89,37 @@ async function runDailyInspireIfDue(client, db, { force = false } = {}) {
       hour: time.hour,
       minute: time.minute,
       timezone: MOUNTAIN_TIME_ZONE,
-      channel_id: channelId,
+      channel_id: INSPIRE_CHANNEL_ID,
       last_run_date: lastRunDate || null
     })
   );
 
-  const channel = await client.channels.fetch(channelId).catch(error => {
-    console.error("[Inspire] Failed to fetch configured channel:", error);
+  const channel = await client.channels.fetch(INSPIRE_CHANNEL_ID).catch(error => {
+    console.error("[Inspire] Failed to fetch fixed inspire channel:", error);
     return null;
   });
 
   if (!channel?.isTextBased?.()) {
-    console.error("[Inspire] Configured inspire channel is missing or not text-based:", channelId);
+    console.error("[Inspire] Fixed inspire channel is missing or not text-based:", INSPIRE_CHANNEL_ID);
     return false;
   }
 
   try {
-    const imageUrl = await fetchInspireImageUrl({ retries: 1 });
-    console.log(
-      "[Inspire] Fetch success",
-      JSON.stringify({ channel_id: channelId, image_url: imageUrl })
-    );
-
-    const sent = await channel.send({
-      embeds: [buildInspireEmbed(imageUrl)]
-    });
+    const sent = await channel.send("/inspire");
 
     db.setAppSetting(INSPIRE_LAST_RUN_KEY, time.dateKey);
     console.log(
       "[Inspire] Post success",
-      JSON.stringify({ channel_id: channelId, message_id: sent.id, date_key: time.dateKey })
+      JSON.stringify({
+        channel_id: INSPIRE_CHANNEL_ID,
+        message_id: sent.id,
+        date_key: time.dateKey,
+        mode: "literal_slash_message"
+      })
     );
     return true;
   } catch (error) {
-    console.error("[Inspire] Fetch or post failed:", error);
+    console.error("[Inspire] Post failed:", error);
     return false;
   }
 }
@@ -408,31 +342,18 @@ async function handleInteraction(interaction, { db }) {
       return true;
     }
 
-    const targetChannel = interaction.options.getChannel("channel") || interaction.channel;
-    if (!targetChannel?.isTextBased?.()) {
-      await interaction.reply({
-        content: "Choose a text channel for daily inspire posts.",
-        flags: MessageFlags.Ephemeral
-      });
-      return true;
-    }
-
-    db.setManyAppSettings({
-      [INSPIRE_CHANNEL_KEY]: targetChannel.id,
-      [INSPIRE_GUILD_KEY]: interaction.guildId
-    });
-
     console.log(
-      "[Inspire] Setup updated",
+      "[Inspire] Setup checked",
       JSON.stringify({
         guild_id: interaction.guildId,
-        channel_id: targetChannel.id,
+        channel_id: INSPIRE_CHANNEL_ID,
         actor_user_id: interaction.user.id
       })
     );
 
     await interaction.reply({
-      content: `Daily inspire will post in <#${targetChannel.id}> at 6:00 AM Mountain Time.`,
+      content:
+        `Daily inspire is locked to <#${INSPIRE_CHANNEL_ID}> and will send \`/inspire\` at 6:00 AM MST each day.`,
       flags: MessageFlags.Ephemeral
     });
     return true;
