@@ -1,8 +1,11 @@
 // index.js
 require("dotenv").config();
 const crypto = require("crypto");
+const fetch = (...args) =>
+  import("node-fetch").then(({ default: fetchImpl }) => fetchImpl(...args));
 
 const {
+  AttachmentBuilder,
   Client,
   GatewayIntentBits,
   Partials,
@@ -34,6 +37,11 @@ const MEE6_FORWARD_CONFIRM_MS = 2 * 60 * 1000;
 const MEE6_FORWARD_YES_PREFIX = "mee6_forward_yes";
 const MEE6_FORWARD_NO_PREFIX = "mee6_forward_no";
 const MEE6_FORWARD_DELETE_PREFIX = "mee6_forward_delete";
+const MEE6_IGNORED_CHANNEL_IDS = new Set([
+  MEE6_ACHIEVEMENT_FORWARD_CHANNEL_ID,
+  "1113088448232968192",
+  "1113482300915732651"
+]);
 const mee6PendingForwards = new Map();
 
 function getMee6ControlRoleIds() {
@@ -69,7 +77,7 @@ function extractMee6Text(message) {
 
 function shouldPromptMee6Forward(message) {
   if (!message || message.author?.id !== MEE6_BOT_ID) return false;
-  if (message.channelId === MEE6_ACHIEVEMENT_FORWARD_CHANNEL_ID) return false;
+  if (MEE6_IGNORED_CHANNEL_IDS.has(String(message.channelId || ""))) return false;
   return true;
 }
 
@@ -86,7 +94,6 @@ async function sendMee6ForwardTarget(message, client) {
     return false;
   }
 
-  const forwardContent = extractMee6Text(message);
   const forwardedEmbeds = Array.from(message.embeds || [])
     .map(embed => {
       try {
@@ -98,15 +105,89 @@ async function sendMee6ForwardTarget(message, client) {
     .filter(Boolean)
     .slice(0, 10);
 
-  if (!forwardContent && !forwardedEmbeds.length) {
-    console.warn("[MEE6] Matched achievement message had no forwardable content.");
-    return false;
+  const relayFiles = [];
+  for (const attachment of Array.from(message.attachments?.values?.() || []).slice(0, 10)) {
+    try {
+      const response = await fetch(attachment.url);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      relayFiles.push(
+        new AttachmentBuilder(Buffer.from(await response.arrayBuffer()), {
+          name: attachment.name || `attachment-${attachment.id}`,
+          description: attachment.description || undefined
+        })
+      );
+    } catch (error) {
+      console.error(
+        "[MEE6] Failed to fetch attachment for relay",
+        JSON.stringify({
+          attachment_id: attachment.id,
+          error: error.message
+        })
+      );
+    }
   }
 
-  const label = "Forwarded message from MEE6:";
+  if (!message.content && !forwardedEmbeds.length && !relayFiles.length) {
+    const fallbackText = extractMee6Text(message);
+    if (!fallbackText) {
+      console.warn("[MEE6] Matched achievement message had no forwardable content.");
+      return false;
+    }
+  }
+
+  const basePayload = {
+    content: message.content || undefined,
+    embeds: forwardedEmbeds,
+    files: relayFiles
+  };
+
+  const me = targetChannel.guild?.members?.me || null;
+  const canUseWebhook =
+    typeof targetChannel.fetchWebhooks === "function" &&
+    typeof targetChannel.createWebhook === "function" &&
+    !!me?.permissions?.has?.(PermissionsBitField.Flags.ManageWebhooks);
+
+  if (canUseWebhook) {
+    try {
+      const hooks = await targetChannel.fetchWebhooks();
+      let webhook =
+        hooks.find(hook => hook.owner?.id === client.user.id && hook.name === "Tyrone Relay") ||
+        null;
+
+      if (!webhook) {
+        webhook = await targetChannel.createWebhook({
+          name: "Tyrone Relay",
+          avatar: client.user.displayAvatarURL()
+        });
+      }
+
+      await webhook.send({
+        ...basePayload,
+        username:
+          message.member?.displayName ||
+          message.author?.globalName ||
+          message.author?.username ||
+          "MEE6",
+        avatarURL: message.author?.displayAvatarURL?.() || undefined
+      });
+      return true;
+    } catch (error) {
+      console.error("[MEE6] Webhook relay failed, falling back to channel send:", error);
+    }
+  }
+
+  const fallbackText = extractMee6Text(message);
   await targetChannel.send({
-    content: forwardContent ? `${label}\n${forwardContent}` : label,
-    embeds: forwardedEmbeds
+    content:
+      message.content ||
+      (fallbackText
+        ? `Forwarded message from MEE6:\n${fallbackText}`
+        : "Forwarded message from MEE6:"),
+    embeds: forwardedEmbeds,
+    files: relayFiles
   });
   return true;
 }
@@ -141,7 +222,9 @@ async function resolveMee6Forward(client, sourceMessageId, action = "forward", r
           source_channel_id: sourceMessage.channelId,
           target_channel_id: MEE6_ACHIEVEMENT_FORWARD_CHANNEL_ID,
           message_id: sourceMessage.id,
-          reason
+          reason,
+          embed_count: sourceMessage.embeds?.length || 0,
+          attachment_count: sourceMessage.attachments?.size || 0
         })
       );
     }
