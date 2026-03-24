@@ -1,5 +1,5 @@
 // commands/tyrone.js
-const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle, PermissionsBitField } = require("discord.js");
 
 const fetch = (...args) =>
   import("node-fetch").then(({ default: fetch }) => fetch(...args));
@@ -365,6 +365,13 @@ function canNag(userId, settings) {
 
 function markNag(userId) {
   nagCooldown.set(userId, Date.now());
+}
+
+function canDeleteSoftIntercept(interaction, requesterId) {
+  if (interaction.user.id === requesterId) return true;
+  if (interaction.member?.permissions?.has?.(PermissionsBitField.Flags.ManageMessages)) return true;
+  if (interaction.member?.permissions?.has?.(PermissionsBitField.Flags.ManageChannels)) return true;
+  return false;
 }
 
 function getActionForStrikeCount(strikes) {
@@ -1228,6 +1235,45 @@ async function handleInteraction(interaction, { db }) {
 }
 
 async function handleButton(interaction, { db }) {
+  const softDeleteMatch = String(interaction.customId || "").match(/^tyrone_soft_delete:(\d+):(\d+)$/);
+  if (softDeleteMatch) {
+    const [, sourceMessageId, requesterId] = softDeleteMatch;
+
+    if (!canDeleteSoftIntercept(interaction, requesterId)) {
+      await interaction.reply({
+        content: "Only the original user or staff can use that delete button.",
+        ephemeral: true
+      });
+      return true;
+    }
+
+    await interaction.deferUpdate();
+
+    const sourceMessage = await interaction.channel?.messages?.fetch(sourceMessageId).catch(() => null);
+    if (sourceMessage) {
+      await sourceMessage.delete().catch(error => {
+        console.error("[Tyrone] Failed to delete soft-intercept source message:", error);
+      });
+    }
+
+    const pending = pendingApprovals.get(requesterId);
+    if (pending?.messageId === sourceMessageId) {
+      pendingApprovals.delete(requesterId);
+    }
+
+    db.logTyroneEvent("soft_intercept_deleted", {
+      source_message_id: sourceMessageId,
+      requester_id: requesterId,
+      deleted_by: interaction.user.id,
+      channel_id: interaction.channelId
+    });
+
+    await interaction.message.delete().catch(error => {
+      console.error("[Tyrone] Failed to delete soft-intercept notice:", error);
+    });
+    return true;
+  }
+
   const [baseId, reportIdRaw] = String(interaction.customId || "").split(":");
   if (!["tyrone_report_dm", "tyrone_report_ticket", "tyrone_report_none"].includes(baseId)) {
     return false;
@@ -1559,7 +1605,17 @@ async function handleMessage(message, { db }) {
           content
         });
 
-        await message.reply(notice);
+        await message.reply({
+          content: notice,
+          components: [
+            new ActionRowBuilder().addComponents(
+              new ButtonBuilder()
+                .setCustomId(`tyrone_soft_delete:${message.id}:${message.author.id}`)
+                .setLabel("Delete")
+                .setStyle(ButtonStyle.Danger)
+            )
+          ]
+        });
         const responseLog = db.logTyroneResponse({
           source_type: "discord",
           source_ref: message.id,
