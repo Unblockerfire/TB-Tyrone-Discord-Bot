@@ -18,6 +18,12 @@ const VERIFIED_ROLE_ID = "1113560011193450536"; // Verified
 
 // Owner role (you) allowed to run the setup command
 const OWNER_ROLE_ID = "1113158001604427966";
+const VERIFY_REFRESH_TIMEZONE = "America/Boise";
+const VERIFY_RULES_MESSAGE_KEY = "rules_verify.rules_message_id";
+const VERIFY_PANEL_MESSAGE_KEY = "rules_verify.verify_message_id";
+const VERIFY_LAST_REFRESH_KEY = "rules_verify.last_refresh_date";
+
+let verifyRefreshStarted = false;
 
 // helper: customId builder scoped to user
 function uidScoped(id, userId) {
@@ -30,8 +36,172 @@ function parseScopedId(customId) {
   return { base: parts[0], uid: parts[1] || null };
 }
 
+function getBoiseDateKey(date = new Date()) {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: VERIFY_REFRESH_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  });
+
+  const parts = Object.fromEntries(
+    formatter.formatToParts(date).map(part => [part.type, part.value])
+  );
+
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function getStoredPanelState(db) {
+  return {
+    rulesMessageId: db?.getAppSetting?.(VERIFY_RULES_MESSAGE_KEY)?.value || null,
+    verifyMessageId: db?.getAppSetting?.(VERIFY_PANEL_MESSAGE_KEY)?.value || null,
+    lastRefreshDate: db?.getAppSetting?.(VERIFY_LAST_REFRESH_KEY)?.value || null
+  };
+}
+
+function savePanelState(db, state = {}) {
+  db?.setManyAppSettings?.({
+    [VERIFY_RULES_MESSAGE_KEY]: state.rulesMessageId || "",
+    [VERIFY_PANEL_MESSAGE_KEY]: state.verifyMessageId || "",
+    [VERIFY_LAST_REFRESH_KEY]: state.lastRefreshDate || ""
+  });
+}
+
+async function postRulesVerifyPanels(guild, db, { refreshReason = "manual" } = {}) {
+  const rulesChannel = await guild.channels.fetch(RULES_CHANNEL_ID).catch(() => null);
+  const verifyChannel = await guild.channels.fetch(VERIFY_CHANNEL_ID).catch(() => null);
+
+  if (!rulesChannel || !rulesChannel.isTextBased()) {
+    throw new Error("RULES_CHANNEL_ID is invalid or not a text channel.");
+  }
+
+  if (!verifyChannel || !verifyChannel.isTextBased()) {
+    throw new Error("VERIFY_CHANNEL_ID is invalid or not a text channel.");
+  }
+
+  const existing = getStoredPanelState(db);
+
+  if (existing.rulesMessageId) {
+    const priorRulesMessage = await rulesChannel.messages.fetch(existing.rulesMessageId).catch(() => null);
+    if (priorRulesMessage) {
+      await priorRulesMessage.delete().catch(error => {
+        console.error("[Verify panels] Failed to delete old rules message:", error);
+      });
+    }
+  }
+
+  if (existing.verifyMessageId) {
+    const priorVerifyMessage = await verifyChannel.messages.fetch(existing.verifyMessageId).catch(() => null);
+    if (priorVerifyMessage) {
+      await priorVerifyMessage.delete().catch(error => {
+        console.error("[Verify panels] Failed to delete old verify message:", error);
+      });
+    }
+  }
+
+  const rulesEmbed = new EmbedBuilder()
+    .setTitle("Rules Agreement")
+    .setColor(0xff3b30)
+    .setDescription(
+      "Do you accept the server rules?\n\n" +
+        "✅ If you accept, you can continue to verification.\n" +
+        "❌ If you do not accept, you will be removed (you can rejoin anytime)."
+    );
+
+  const rulesRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("rules_accept")
+      .setLabel("I accept the rules")
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId("rules_decline")
+      .setLabel("I do not accept")
+      .setStyle(ButtonStyle.Danger)
+  );
+
+  const verifyEmbed = new EmbedBuilder()
+    .setTitle("Verification")
+    .setColor(0x3498db)
+    .setDescription(
+      `Once you’ve accepted the rules in <#${RULES_CHANNEL_ID}>, click **Verify me** below.`
+    );
+
+  const verifyRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("verify_me")
+      .setLabel("Verify me")
+      .setStyle(ButtonStyle.Primary)
+  );
+
+  const rulesMessage = await rulesChannel.send({
+    embeds: [rulesEmbed],
+    components: [rulesRow]
+  });
+
+  const verifyMessage = await verifyChannel.send({
+    embeds: [verifyEmbed],
+    components: [verifyRow]
+  });
+
+  savePanelState(db, {
+    rulesMessageId: rulesMessage.id,
+    verifyMessageId: verifyMessage.id,
+    lastRefreshDate: getBoiseDateKey()
+  });
+
+  console.log(
+    "[Verify panels] Refreshed",
+    JSON.stringify({
+      refresh_reason: refreshReason,
+      rules_message_id: rulesMessage.id,
+      verify_message_id: verifyMessage.id,
+      date_key: getBoiseDateKey()
+    })
+  );
+}
+
+async function runDailyVerifyRefresh(client, db, { force = false } = {}) {
+  if (!RULES_CHANNEL_ID || !VERIFY_CHANNEL_ID) return false;
+
+  const state = getStoredPanelState(db);
+  if (!state.rulesMessageId && !state.verifyMessageId) {
+    return false;
+  }
+
+  const dateKey = getBoiseDateKey();
+  if (!force && state.lastRefreshDate === dateKey) {
+    return false;
+  }
+
+  const rulesChannel = await client.channels.fetch(RULES_CHANNEL_ID).catch(() => null);
+  if (!rulesChannel?.guild) {
+    console.error("[Verify panels] Could not resolve guild from rules channel for refresh.");
+    return false;
+  }
+
+  await postRulesVerifyPanels(rulesChannel.guild, db, {
+    refreshReason: force ? "forced_startup_check" : "daily_ticker"
+  });
+  return true;
+}
+
+function startRulesVerifyTicker(client, db) {
+  if (verifyRefreshStarted) return;
+  verifyRefreshStarted = true;
+
+  runDailyVerifyRefresh(client, db).catch(error => {
+    console.error("[Verify panels] Initial refresh check failed:", error);
+  });
+
+  setInterval(() => {
+    runDailyVerifyRefresh(client, db).catch(error => {
+      console.error("[Verify panels] Daily refresh failed:", error);
+    });
+  }, 60 * 60 * 1000);
+}
+
 // ------ SLASH COMMAND HANDLER: /setup-rules-verify ------
-async function handleInteraction(interaction) {
+async function handleInteraction(interaction, { db }) {
   if (!interaction.isChatInputCommand()) return;
   if (interaction.commandName !== "setup-rules-verify") return;
 
@@ -61,72 +231,17 @@ async function handleInteraction(interaction) {
     return;
   }
 
-  const guild = interaction.guild;
-
-  const rulesChannel = await guild.channels.fetch(RULES_CHANNEL_ID).catch(() => null);
-  const verifyChannel = await guild.channels.fetch(VERIFY_CHANNEL_ID).catch(() => null);
-
-  if (!rulesChannel || !rulesChannel.isTextBased()) {
+  try {
+    await postRulesVerifyPanels(interaction.guild, db, {
+      refreshReason: "manual_setup"
+    });
+  } catch (error) {
     await interaction.reply({
-      content: "RULES_CHANNEL_ID is invalid or not a text channel.",
+      content: error.message || "I couldn’t refresh the rules + verify panels.",
       ephemeral: true
     });
     return;
   }
-
-  if (!verifyChannel || !verifyChannel.isTextBased()) {
-    await interaction.reply({
-      content: "VERIFY_CHANNEL_ID is invalid or not a text channel.",
-      ephemeral: true
-    });
-    return;
-  }
-
-  // ----- RULES PANEL -----
-  const rulesEmbed = new EmbedBuilder()
-    .setTitle("Rules Agreement")
-    .setColor(0xff3b30)
-    .setDescription(
-      "Do you accept the server rules?\n\n" +
-        "✅ If you accept, you can continue to verification.\n" +
-        "❌ If you do not accept, you will be removed (you can rejoin anytime)."
-    );
-
-  const rulesRow = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId("rules_accept")
-      .setLabel("I accept the rules")
-      .setStyle(ButtonStyle.Success),
-    new ButtonBuilder()
-      .setCustomId("rules_decline")
-      .setLabel("I do not accept")
-      .setStyle(ButtonStyle.Danger)
-  );
-
-  await rulesChannel.send({
-    embeds: [rulesEmbed],
-    components: [rulesRow]
-  });
-
-  // ----- VERIFY PANEL -----
-  const verifyEmbed = new EmbedBuilder()
-    .setTitle("Verification")
-    .setColor(0x3498db)
-    .setDescription(
-      `Once you’ve accepted the rules in <#${RULES_CHANNEL_ID}>, click **Verify me** below.`
-    );
-
-  const verifyRow = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId("verify_me")
-      .setLabel("Verify me")
-      .setStyle(ButtonStyle.Primary)
-  );
-
-  await verifyChannel.send({
-    embeds: [verifyEmbed],
-    components: [verifyRow]
-  });
 
   await interaction.reply({
     content: "Rules + Verify panels posted ✅",
@@ -345,5 +460,6 @@ async function handleButton(interaction) {
 
 module.exports = {
   handleInteraction,
-  handleButton
+  handleButton,
+  startRulesVerifyTicker
 };

@@ -439,6 +439,15 @@ client.once("clientReady", () => {
   } catch (err) {
     console.error("[Inspire] Failed to start daily scheduler:", err);
   }
+
+  try {
+    if (notifyRoles && typeof notifyRoles.startRulesVerifyTicker === "function") {
+      notifyRoles.startRulesVerifyTicker(client, db);
+      console.log("[Verify panels] Daily refresh started ✅");
+    }
+  } catch (err) {
+    console.error("[Verify panels] Failed to start daily refresh:", err);
+  }
 });
 
 // ---------- INTERACTION ROUTER ----------
