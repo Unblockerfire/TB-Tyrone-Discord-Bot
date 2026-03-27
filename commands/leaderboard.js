@@ -7,6 +7,7 @@ const { EmbedBuilder } = require("discord.js");
 const SETUP_CHANNEL_ID = "1479295934646059069";
 const DISPLAY_CHANNEL_ID = "1478919882463772846";
 const OWNER_ROLE_ID = "1113158001604427966";
+const LEADERBOARD_MANAGER_ROLE_ID = "1113090317592309800";
 
 const DATA_PATH = path.join(__dirname, "..", "leaderboard-data.json");
 
@@ -77,6 +78,14 @@ function progressBar(value, max) {
 
 function formatNumber(value) {
   return Number(value || 0).toLocaleString();
+}
+
+function canManageLeaderboard(member) {
+  if (!member?.roles?.cache) return false;
+  return (
+    member.roles.cache.has(OWNER_ROLE_ID) ||
+    member.roles.cache.has(LEADERBOARD_MANAGER_ROLE_ID)
+  );
 }
 
 // ---------- EMBEDS ----------
@@ -209,7 +218,7 @@ async function handleInteraction(interaction) {
     return true;
   }
 
-  if (!interaction.member?.roles?.cache?.has(OWNER_ROLE_ID)) {
+  if (!canManageLeaderboard(interaction.member)) {
     await interaction.reply({
       content: "No permission.",
       ephemeral: true

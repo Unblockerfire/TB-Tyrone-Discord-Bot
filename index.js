@@ -432,15 +432,6 @@ client.once("clientReady", () => {
   }
 
   try {
-    if (communityPosts && typeof communityPosts.startDailyInspireTicker === "function") {
-      communityPosts.startDailyInspireTicker(client, db);
-      console.log("[Inspire] Daily scheduler started ✅");
-    }
-  } catch (err) {
-    console.error("[Inspire] Failed to start daily scheduler:", err);
-  }
-
-  try {
     if (notifyRoles && typeof notifyRoles.startRulesVerifyTicker === "function") {
       notifyRoles.startRulesVerifyTicker(client, db);
       console.log("[Verify panels] Daily refresh started ✅");
@@ -499,7 +490,6 @@ client.on("interactionCreate", async (interaction) => {
           await requests.handleInteraction(interaction, { client, db });
           return;
 
-        case "setup-inspire":
         case "setup-shoutout":
           await communityPosts.handleInteraction(interaction, { client, db });
           return;

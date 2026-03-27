@@ -146,10 +146,6 @@ const commands = [
     .setDescription("Post the Tyrone request/help panel (staff/admin only)"),
 
   new SlashCommandBuilder()
-    .setName("setup-inspire")
-    .setDescription("View the fixed daily inspire schedule info"),
-
-  new SlashCommandBuilder()
     .setName("setup-shoutout")
     .setDescription("Configure and post the Shoutout of the Day")
     .addChannelOption(option =>

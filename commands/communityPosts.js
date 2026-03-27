@@ -9,17 +9,12 @@ const {
 
 const OWNER_ROLE_ID = "1113158001604427966";
 const SHOUTOUT_ROLE_ID = "1484176418693972019";
-const MOUNTAIN_TIME_ZONE = "America/Phoenix";
-const INSPIRE_CHANNEL_ID = "1113676783674462341";
-const INSPIRE_LAST_RUN_KEY = "daily_inspire.last_run_date";
 const SHOUTOUT_CHANNEL_KEY = "shoutout.channel_id";
 const SHOUTOUT_GUILD_KEY = "shoutout.guild_id";
 const SHOUTOUT_MODAL_PREFIX = "shoutout_setup_modal:";
 const SHOUTOUT_USERS_INPUT_ID = "shoutout_users";
 const SHOUTOUT_REASON_INPUT_ID = "shoutout_reason";
 const SHOUTOUT_NOTES_INPUT_ID = "shoutout_notes";
-
-let inspireTickerStarted = false;
 
 function getStaffRoleIds() {
   return [
@@ -43,100 +38,6 @@ function canManageCommunity(member) {
 
 function getSettingValue(db, key) {
   return db.getAppSetting(key)?.value || null;
-}
-
-function getMountainTimeParts(date = new Date()) {
-  const formatter = new Intl.DateTimeFormat("en-CA", {
-    timeZone: MOUNTAIN_TIME_ZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false
-  });
-
-  const parts = Object.fromEntries(
-    formatter.formatToParts(date).map(part => [part.type, part.value])
-  );
-
-  return {
-    year: parts.year,
-    month: parts.month,
-    day: parts.day,
-    hour: Number(parts.hour || 0),
-    minute: Number(parts.minute || 0),
-    dateKey: `${parts.year}-${parts.month}-${parts.day}`
-  };
-}
-
-async function runDailyInspireIfDue(client, db, { force = false } = {}) {
-  const time = getMountainTimeParts();
-  const shouldRun = force || (time.hour === 6 && time.minute === 0);
-  if (!shouldRun) return false;
-
-  const lastRunDate = getSettingValue(db, INSPIRE_LAST_RUN_KEY);
-
-  if (!force && lastRunDate === time.dateKey) {
-    return false;
-  }
-
-  console.log(
-    "[Inspire] Scheduler fired",
-    JSON.stringify({
-      force,
-      date_key: time.dateKey,
-      hour: time.hour,
-      minute: time.minute,
-      timezone: MOUNTAIN_TIME_ZONE,
-      channel_id: INSPIRE_CHANNEL_ID,
-      last_run_date: lastRunDate || null
-    })
-  );
-
-  const channel = await client.channels.fetch(INSPIRE_CHANNEL_ID).catch(error => {
-    console.error("[Inspire] Failed to fetch fixed inspire channel:", error);
-    return null;
-  });
-
-  if (!channel?.isTextBased?.()) {
-    console.error("[Inspire] Fixed inspire channel is missing or not text-based:", INSPIRE_CHANNEL_ID);
-    return false;
-  }
-
-  try {
-    const sent = await channel.send("/inspire");
-
-    db.setAppSetting(INSPIRE_LAST_RUN_KEY, time.dateKey);
-    console.log(
-      "[Inspire] Post success",
-      JSON.stringify({
-        channel_id: INSPIRE_CHANNEL_ID,
-        message_id: sent.id,
-        date_key: time.dateKey,
-        mode: "literal_slash_message"
-      })
-    );
-    return true;
-  } catch (error) {
-    console.error("[Inspire] Post failed:", error);
-    return false;
-  }
-}
-
-function startDailyInspireTicker(client, db) {
-  if (inspireTickerStarted) return;
-  inspireTickerStarted = true;
-
-  runDailyInspireIfDue(client, db).catch(error => {
-    console.error("[Inspire] Initial scheduler check error:", error);
-  });
-
-  setInterval(() => {
-    runDailyInspireIfDue(client, db).catch(error => {
-      console.error("[Inspire] Scheduler error:", error);
-    });
-  }, 30 * 1000);
 }
 
 function buildShoutoutModal(selectedUserIds = []) {
@@ -325,40 +226,6 @@ async function postShoutoutMessage(channel, payload) {
 async function handleInteraction(interaction, { db }) {
   if (!interaction.isChatInputCommand()) return false;
 
-  if (interaction.commandName === "setup-inspire") {
-    if (!interaction.inGuild()) {
-      await interaction.reply({
-        content: "This command can only be used in a server.",
-        flags: MessageFlags.Ephemeral
-      });
-      return true;
-    }
-
-    if (!canManageCommunity(interaction.member)) {
-      await interaction.reply({
-        content: "You do not have permission to set up daily inspire posts.",
-        flags: MessageFlags.Ephemeral
-      });
-      return true;
-    }
-
-    console.log(
-      "[Inspire] Setup checked",
-      JSON.stringify({
-        guild_id: interaction.guildId,
-        channel_id: INSPIRE_CHANNEL_ID,
-        actor_user_id: interaction.user.id
-      })
-    );
-
-    await interaction.reply({
-      content:
-        `Daily inspire is locked to <#${INSPIRE_CHANNEL_ID}> and will send \`/inspire\` at 6:00 AM MST each day.`,
-      flags: MessageFlags.Ephemeral
-    });
-    return true;
-  }
-
   if (interaction.commandName === "setup-shoutout") {
     if (!interaction.inGuild()) {
       await interaction.reply({
@@ -546,7 +413,5 @@ async function handleModalSubmit(interaction, { db }) {
 
 module.exports = {
   handleInteraction,
-  handleModalSubmit,
-  runDailyInspireIfDue,
-  startDailyInspireTicker
+  handleModalSubmit
 };
