@@ -81,10 +81,19 @@ function formatNumber(value) {
 }
 
 function canManageLeaderboard(member) {
-  if (!member?.roles?.cache) return false;
+  return !!member?.roles?.cache?.has(OWNER_ROLE_ID);
+}
+
+function canAddToLeaderboard(member) {
+  return !!member?.roles?.cache?.has(LEADERBOARD_MANAGER_ROLE_ID);
+}
+
+function canRunLeaderboardCommand(member, commandName) {
+  if (canManageLeaderboard(member)) return true;
+
   return (
-    member.roles.cache.has(OWNER_ROLE_ID) ||
-    member.roles.cache.has(LEADERBOARD_MANAGER_ROLE_ID)
+    canAddToLeaderboard(member) &&
+    (commandName === "leaderboard-add" || commandName === "leaderboard-add-likes")
   );
 }
 
@@ -218,7 +227,7 @@ async function handleInteraction(interaction) {
     return true;
   }
 
-  if (!canManageLeaderboard(interaction.member)) {
+  if (!canRunLeaderboardCommand(interaction.member, cmd)) {
     await interaction.reply({
       content: "No permission.",
       ephemeral: true
