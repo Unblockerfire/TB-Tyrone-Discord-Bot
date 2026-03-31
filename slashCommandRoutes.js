@@ -24,6 +24,12 @@ const slashCommandRouteGroups = [
     commands: ["setup-support-panel"]
   },
   {
+    moduleKey: "applications",
+    modulePath: "./commands/applications",
+    handlerName: "handleInteraction",
+    commands: ["setup-applacation", "application-info"]
+  },
+  {
     moduleKey: "roleSelect",
     modulePath: "./commands/roleSelect",
     handlerName: "handleInteraction",

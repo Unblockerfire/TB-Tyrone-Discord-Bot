@@ -8,7 +8,7 @@
     "start": "node index.js",
     "deploy": "node deploy-commands.js",
     "smoke": "node scripts/validate-bot.js",
-    "check": "node --check index.js && node --check deploy-commands.js && node --check slashCommands.js && node --check slashCommandRoutes.js && node --check commands/moderation.js && node --check commands/moderationPermissions.js && node --check commands/tickets.js && node --check commands/fortniteQueue.js && node scripts/validate-bot.js",
+    "check": "node --check index.js && node --check db.js && node --check deploy-commands.js && node --check slashCommands.js && node --check slashCommandRoutes.js && node --check commands/moderation.js && node --check commands/moderationPermissions.js && node --check commands/tickets.js && node --check commands/fortniteQueue.js && node --check commands/applications.js && node scripts/validate-bot.js",
     "audit:prod": "npm audit --omit=dev --audit-level=critical"
   },
   "dependencies": {

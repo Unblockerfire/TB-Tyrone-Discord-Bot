@@ -30,6 +30,7 @@ const bangCommands = require("./commands/bangCommands");
 const requests = require("./commands/requests");
 const staffPanels = require("./commands/staffPanels");
 const communityPosts = require("./commands/communityPosts");
+const applications = require("./commands/applications");
 const { slashCommandRouteMap } = require("./slashCommandRoutes");
 
 const MEE6_BOT_ID = "159985870458322944";
@@ -54,6 +55,7 @@ const slashCommandModules = {
   bangCommands,
   requests,
   communityPosts,
+  applications,
   staffPanels,
   leaderboard,
   fortniteQueue,
@@ -448,6 +450,15 @@ client.once("clientReady", () => {
   }
 
   try {
+    if (applications && typeof applications.startApplicationTicker === "function") {
+      applications.startApplicationTicker(client, db);
+      console.log("[Applications] Expiry ticker started ✅");
+    }
+  } catch (err) {
+    console.error("[Applications] Failed to start expiry ticker:", err);
+  }
+
+  try {
     if (notifyRoles && typeof notifyRoles.startRulesVerifyTicker === "function") {
       notifyRoles.startRulesVerifyTicker(client, db);
       console.log("[Verify panels] Daily refresh started ✅");
@@ -565,6 +576,12 @@ client.on("interactionCreate", async (interaction) => {
           : false;
       if (handledByPrivateVc) return;
 
+      const handledByApplications =
+        applications && typeof applications.handleButton === "function"
+          ? await applications.handleButton(interaction, { client, db })
+          : false;
+      if (handledByApplications) return;
+
       const handledByTickets =
         tickets && typeof tickets.handleButton === "function"
           ? await tickets.handleButton(interaction, { client, db })
@@ -574,7 +591,13 @@ client.on("interactionCreate", async (interaction) => {
       return;
     }
 
-    if (interaction.isStringSelectMenu() || interaction.isUserSelectMenu()) {
+    if (interaction.isStringSelectMenu() || interaction.isUserSelectMenu() || interaction.isChannelSelectMenu()) {
+      const handledByApplications =
+        applications && typeof applications.handleSelectMenu === "function"
+          ? await applications.handleSelectMenu(interaction, { client, db })
+          : false;
+      if (handledByApplications) return;
+
       const handledByRequests =
         requests && typeof requests.handleSelectMenu === "function"
           ? await requests.handleSelectMenu(interaction, { client, db })
@@ -597,6 +620,12 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     if (interaction.isModalSubmit()) {
+      const handledByApplications =
+        applications && typeof applications.handleModalSubmit === "function"
+          ? await applications.handleModalSubmit(interaction, { client, db })
+          : false;
+      if (handledByApplications) return;
+
       const handledByRequests =
         requests && typeof requests.handleModalSubmit === "function"
           ? await requests.handleModalSubmit(interaction, { client, db })

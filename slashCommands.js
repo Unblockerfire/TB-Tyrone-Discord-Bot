@@ -86,6 +86,14 @@ const slashCommands = [
     .setDescription("Post the Get Support ticket button panel (admin/owner only)"),
 
   new SlashCommandBuilder()
+    .setName("setup-applacation")
+    .setDescription("Post the Tyrone application panel"),
+
+  new SlashCommandBuilder()
+    .setName("application-info")
+    .setDescription("Manage Tyrone application settings"),
+
+  new SlashCommandBuilder()
     .setName("setup-live")
     .setDescription("Post the Live Notifications role button panel (owner/admin)"),
 

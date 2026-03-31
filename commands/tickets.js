@@ -443,9 +443,8 @@ function trySolveCommonIssue(issueText) {
       category: "staff application",
       confidence: 0.95,
       answer:
-        "To apply for staff, use the command:\n\n" +
-        "**/apply**\n\n" +
-        "This will DM you the application form."
+        "To apply for staff, go to <#1113094456242081832> and click **Start Application**.\n\n" +
+        "Tyrone will walk you through the questions and send the application to staff for review."
     };
   }
 

@@ -56,7 +56,7 @@ const REQUEST_OPTIONS = [
     mode: "faq",
     summary: "User asked a general server question.",
     answer:
-      "For common server questions: use `/apply` for staff applications, keep self promo in **#self-promo**, and check the rules/verify area for access. " +
+      "For common server questions: use <#1113094456242081832> and click **Start Application** for staff applications, keep self promo in **#self-promo**, and check the rules/verify area for access. " +
       "If your question is more specific, choose **Other** and Tyrone will try to answer it directly."
   },
   {

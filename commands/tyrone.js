@@ -26,7 +26,7 @@ const DEFAULTS = {
     "You are Tyrone, the helper bot for the TB Server (a Discord community). " +
     "You talk in a friendly, direct way. " +
     "If the question is about this specific server, prefer these rules when relevant:\n" +
-    "- Mod applications: /apply command DMs the user with the topic.\n" +
+    "- Staff applications: go to the applications channel and click Start Application.\n" +
     "- Strike system: 1 = warning, 2 = 1 hour mute, 3 = 3 hour mute, 4 = temp ban (appeal allowed), 5 = perm ban.\n" +
     "- Self-promo must stay in the #self-promo channel.\n" +
     "- Streaming schedule is currently informal: usually around 6/7 PM MST to 9/9:30 PM MST.\n" +
@@ -61,7 +61,7 @@ const DEFAULT_FAQ_ENTRIES = [
       "be a mod"
     ].join("\n"),
     answer:
-      "To become a mod, use the `/apply` command. It should DM you with the application topic and info you need to fill out.",
+      "To apply for staff, go to <#1113094456242081832> and click **Start Application**. Tyrone will guide you through the questions there.",
     enabled: 1,
     sort_order: 10
   },
@@ -454,9 +454,8 @@ function looksLikeHelpAnswerStatement(lowered) {
     lowered.startsWith("for help");
 
   const containsInstructionPhrase =
-    lowered.includes('"/apply" command') ||
-    lowered.includes("use the `/apply`") ||
-    lowered.includes("use the \"/apply\"") ||
+    lowered.includes("start application") ||
+    lowered.includes("applications channel") ||
     lowered.includes("search for ") ||
     lowered.includes("to apply") ||
     lowered.includes("let us know in ") ||

@@ -202,6 +202,54 @@ db.prepare(`
   )
 `).run();
 
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS application_configs (
+    key TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    open INTEGER NOT NULL DEFAULT 0,
+    questions_json TEXT NOT NULL DEFAULT '[]',
+    confirmation_message TEXT NOT NULL,
+    completion_message TEXT NOT NULL,
+    accepted_message TEXT NOT NULL,
+    denied_message TEXT NOT NULL,
+    required_roles_json TEXT NOT NULL DEFAULT '[]',
+    restricted_roles_json TEXT NOT NULL DEFAULT '[]',
+    accepted_roles_json TEXT NOT NULL DEFAULT '[]',
+    denied_roles_json TEXT NOT NULL DEFAULT '[]',
+    accepted_removal_roles_json TEXT NOT NULL DEFAULT '[]',
+    denied_removal_roles_json TEXT NOT NULL DEFAULT '[]',
+    ping_roles_json TEXT NOT NULL DEFAULT '[]',
+    manager_roles_json TEXT NOT NULL DEFAULT '[]',
+    review_channel_id TEXT,
+    cooldown_ms INTEGER NOT NULL DEFAULT 86400000,
+    time_limit_ms INTEGER NOT NULL DEFAULT 3600000,
+    staff_thread_enabled INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL
+  )
+`).run();
+
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS application_submissions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    application_key TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    guild_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    answers_json TEXT NOT NULL DEFAULT '[]',
+    current_question_index INTEGER NOT NULL DEFAULT 0,
+    started_at INTEGER NOT NULL,
+    expires_at INTEGER,
+    submitted_at INTEGER,
+    review_channel_id TEXT,
+    review_message_id TEXT,
+    review_thread_id TEXT,
+    reviewer_user_id TEXT,
+    review_action TEXT,
+    review_notes TEXT,
+    updated_at INTEGER NOT NULL
+  )
+`).run();
+
 // ---------- FORTNITE TABLES ----------
 
 // fortnite_links: Discord user <-> Fortnite username link + verification/rules status
@@ -1902,6 +1950,180 @@ const deleteChecklistPanelStmt = db.prepare(`
   WHERE message_id = ?
 `);
 
+const getApplicationConfigStmt = db.prepare(`
+  SELECT *
+  FROM application_configs
+  WHERE key = ?
+`);
+
+const listApplicationConfigsStmt = db.prepare(`
+  SELECT *
+  FROM application_configs
+  ORDER BY display_name ASC
+`);
+
+const upsertApplicationConfigStmt = db.prepare(`
+  INSERT INTO application_configs (
+    key,
+    display_name,
+    open,
+    questions_json,
+    confirmation_message,
+    completion_message,
+    accepted_message,
+    denied_message,
+    required_roles_json,
+    restricted_roles_json,
+    accepted_roles_json,
+    denied_roles_json,
+    accepted_removal_roles_json,
+    denied_removal_roles_json,
+    ping_roles_json,
+    manager_roles_json,
+    review_channel_id,
+    cooldown_ms,
+    time_limit_ms,
+    staff_thread_enabled,
+    updated_at
+  )
+  VALUES (
+    @key,
+    @display_name,
+    @open,
+    @questions_json,
+    @confirmation_message,
+    @completion_message,
+    @accepted_message,
+    @denied_message,
+    @required_roles_json,
+    @restricted_roles_json,
+    @accepted_roles_json,
+    @denied_roles_json,
+    @accepted_removal_roles_json,
+    @denied_removal_roles_json,
+    @ping_roles_json,
+    @manager_roles_json,
+    @review_channel_id,
+    @cooldown_ms,
+    @time_limit_ms,
+    @staff_thread_enabled,
+    @updated_at
+  )
+  ON CONFLICT(key) DO UPDATE SET
+    display_name = excluded.display_name,
+    open = excluded.open,
+    questions_json = excluded.questions_json,
+    confirmation_message = excluded.confirmation_message,
+    completion_message = excluded.completion_message,
+    accepted_message = excluded.accepted_message,
+    denied_message = excluded.denied_message,
+    required_roles_json = excluded.required_roles_json,
+    restricted_roles_json = excluded.restricted_roles_json,
+    accepted_roles_json = excluded.accepted_roles_json,
+    denied_roles_json = excluded.denied_roles_json,
+    accepted_removal_roles_json = excluded.accepted_removal_roles_json,
+    denied_removal_roles_json = excluded.denied_removal_roles_json,
+    ping_roles_json = excluded.ping_roles_json,
+    manager_roles_json = excluded.manager_roles_json,
+    review_channel_id = excluded.review_channel_id,
+    cooldown_ms = excluded.cooldown_ms,
+    time_limit_ms = excluded.time_limit_ms,
+    staff_thread_enabled = excluded.staff_thread_enabled,
+    updated_at = excluded.updated_at
+`);
+
+const getApplicationSubmissionStmt = db.prepare(`
+  SELECT *
+  FROM application_submissions
+  WHERE id = ?
+`);
+
+const getActiveApplicationSubmissionForUserStmt = db.prepare(`
+  SELECT *
+  FROM application_submissions
+  WHERE user_id = ?
+    AND guild_id = ?
+    AND status = 'in_progress'
+  ORDER BY started_at DESC, id DESC
+  LIMIT 1
+`);
+
+const getLatestApplicationSubmissionForUserTypeStmt = db.prepare(`
+  SELECT *
+  FROM application_submissions
+  WHERE user_id = ?
+    AND guild_id = ?
+    AND application_key = ?
+    AND status IN ('submitted', 'accepted', 'denied', 'needs_more_info')
+  ORDER BY COALESCE(submitted_at, started_at) DESC, id DESC
+  LIMIT 1
+`);
+
+const createApplicationSubmissionStmt = db.prepare(`
+  INSERT INTO application_submissions (
+    application_key,
+    user_id,
+    guild_id,
+    status,
+    answers_json,
+    current_question_index,
+    started_at,
+    expires_at,
+    submitted_at,
+    review_channel_id,
+    review_message_id,
+    review_thread_id,
+    reviewer_user_id,
+    review_action,
+    review_notes,
+    updated_at
+  )
+  VALUES (
+    @application_key,
+    @user_id,
+    @guild_id,
+    @status,
+    @answers_json,
+    @current_question_index,
+    @started_at,
+    @expires_at,
+    @submitted_at,
+    @review_channel_id,
+    @review_message_id,
+    @review_thread_id,
+    @reviewer_user_id,
+    @review_action,
+    @review_notes,
+    @updated_at
+  )
+`);
+
+const updateApplicationSubmissionStmt = db.prepare(`
+  UPDATE application_submissions
+  SET status = @status,
+      answers_json = @answers_json,
+      current_question_index = @current_question_index,
+      expires_at = @expires_at,
+      submitted_at = @submitted_at,
+      review_channel_id = @review_channel_id,
+      review_message_id = @review_message_id,
+      review_thread_id = @review_thread_id,
+      reviewer_user_id = @reviewer_user_id,
+      review_action = @review_action,
+      review_notes = @review_notes,
+      updated_at = @updated_at
+  WHERE id = @id
+`);
+
+const listDueExpiredApplicationSubmissionsStmt = db.prepare(`
+  SELECT *
+  FROM application_submissions
+  WHERE status = 'in_progress'
+    AND expires_at IS NOT NULL
+    AND expires_at <= ?
+  ORDER BY expires_at ASC, id ASC
+`);
+
 function listChecklistItems() {
   return listChecklistItemsStmt.all();
 }
@@ -1940,6 +2162,196 @@ function listChecklistPanels() {
 
 function deleteChecklistPanel(messageId) {
   return deleteChecklistPanelStmt.run(String(messageId || ""));
+}
+
+function parseJsonValue(value, fallback) {
+  try {
+    return value ? JSON.parse(value) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizeApplicationConfigRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    open: !!row.open,
+    questions: parseJsonValue(row.questions_json, []),
+    required_roles: parseJsonValue(row.required_roles_json, []),
+    restricted_roles: parseJsonValue(row.restricted_roles_json, []),
+    accepted_roles: parseJsonValue(row.accepted_roles_json, []),
+    denied_roles: parseJsonValue(row.denied_roles_json, []),
+    accepted_removal_roles: parseJsonValue(row.accepted_removal_roles_json, []),
+    denied_removal_roles: parseJsonValue(row.denied_removal_roles_json, []),
+    ping_roles: parseJsonValue(row.ping_roles_json, []),
+    manager_roles: parseJsonValue(row.manager_roles_json, []),
+    cooldown_ms: Number(row.cooldown_ms || 0),
+    time_limit_ms: Number(row.time_limit_ms || 0),
+    staff_thread_enabled: !!row.staff_thread_enabled
+  };
+}
+
+function normalizeApplicationSubmissionRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    answers: parseJsonValue(row.answers_json, []),
+    current_question_index: Number(row.current_question_index || 0),
+    started_at: Number(row.started_at || 0),
+    expires_at: row.expires_at ? Number(row.expires_at) : null,
+    submitted_at: row.submitted_at ? Number(row.submitted_at) : null,
+    updated_at: Number(row.updated_at || 0)
+  };
+}
+
+function upsertApplicationConfig(config = {}) {
+  const now = Date.now();
+  upsertApplicationConfigStmt.run({
+    key: String(config.key || "").trim(),
+    display_name: String(config.display_name || "").trim(),
+    open: config.open ? 1 : 0,
+    questions_json: JSON.stringify(Array.isArray(config.questions) ? config.questions : []),
+    confirmation_message: String(config.confirmation_message || "").trim(),
+    completion_message: String(config.completion_message || "").trim(),
+    accepted_message: String(config.accepted_message || "").trim(),
+    denied_message: String(config.denied_message || "").trim(),
+    required_roles_json: JSON.stringify(Array.isArray(config.required_roles) ? config.required_roles : []),
+    restricted_roles_json: JSON.stringify(Array.isArray(config.restricted_roles) ? config.restricted_roles : []),
+    accepted_roles_json: JSON.stringify(Array.isArray(config.accepted_roles) ? config.accepted_roles : []),
+    denied_roles_json: JSON.stringify(Array.isArray(config.denied_roles) ? config.denied_roles : []),
+    accepted_removal_roles_json: JSON.stringify(
+      Array.isArray(config.accepted_removal_roles) ? config.accepted_removal_roles : []
+    ),
+    denied_removal_roles_json: JSON.stringify(
+      Array.isArray(config.denied_removal_roles) ? config.denied_removal_roles : []
+    ),
+    ping_roles_json: JSON.stringify(Array.isArray(config.ping_roles) ? config.ping_roles : []),
+    manager_roles_json: JSON.stringify(Array.isArray(config.manager_roles) ? config.manager_roles : []),
+    review_channel_id: config.review_channel_id ? String(config.review_channel_id) : null,
+    cooldown_ms: Number(config.cooldown_ms || 0),
+    time_limit_ms: Number(config.time_limit_ms || 0),
+    staff_thread_enabled: config.staff_thread_enabled ? 1 : 0,
+    updated_at: now
+  });
+  return getApplicationConfig(String(config.key || "").trim());
+}
+
+function getApplicationConfig(key) {
+  return normalizeApplicationConfigRow(getApplicationConfigStmt.get(String(key || "").trim()));
+}
+
+function listApplicationConfigs() {
+  return listApplicationConfigsStmt.all().map(normalizeApplicationConfigRow);
+}
+
+function createApplicationSubmission(payload = {}) {
+  const now = Date.now();
+  const info = createApplicationSubmissionStmt.run({
+    application_key: String(payload.application_key || "").trim(),
+    user_id: String(payload.user_id || "").trim(),
+    guild_id: String(payload.guild_id || "").trim(),
+    status: String(payload.status || "in_progress").trim(),
+    answers_json: JSON.stringify(Array.isArray(payload.answers) ? payload.answers : []),
+    current_question_index: Number(payload.current_question_index || 0),
+    started_at: Number(payload.started_at || now),
+    expires_at: payload.expires_at ? Number(payload.expires_at) : null,
+    submitted_at: payload.submitted_at ? Number(payload.submitted_at) : null,
+    review_channel_id: payload.review_channel_id ? String(payload.review_channel_id) : null,
+    review_message_id: payload.review_message_id ? String(payload.review_message_id) : null,
+    review_thread_id: payload.review_thread_id ? String(payload.review_thread_id) : null,
+    reviewer_user_id: payload.reviewer_user_id ? String(payload.reviewer_user_id) : null,
+    review_action: payload.review_action ? String(payload.review_action) : null,
+    review_notes: payload.review_notes ? String(payload.review_notes) : null,
+    updated_at: now
+  });
+  return getApplicationSubmission(info.lastInsertRowid);
+}
+
+function getApplicationSubmission(id) {
+  return normalizeApplicationSubmissionRow(getApplicationSubmissionStmt.get(Number(id)));
+}
+
+function updateApplicationSubmission(id, payload = {}) {
+  const current = getApplicationSubmission(id);
+  if (!current) return null;
+  updateApplicationSubmissionStmt.run({
+    id: Number(id),
+    status: String(payload.status ?? current.status),
+    answers_json: JSON.stringify(Array.isArray(payload.answers) ? payload.answers : current.answers),
+    current_question_index: Number(
+      payload.current_question_index !== undefined
+        ? payload.current_question_index
+        : current.current_question_index
+    ),
+    expires_at:
+      payload.expires_at === undefined
+        ? current.expires_at
+        : payload.expires_at === null
+          ? null
+          : Number(payload.expires_at),
+    submitted_at:
+      payload.submitted_at === undefined
+        ? current.submitted_at
+        : payload.submitted_at === null
+          ? null
+          : Number(payload.submitted_at),
+    review_channel_id:
+      payload.review_channel_id === undefined ? current.review_channel_id : payload.review_channel_id,
+    review_message_id:
+      payload.review_message_id === undefined ? current.review_message_id : payload.review_message_id,
+    review_thread_id:
+      payload.review_thread_id === undefined ? current.review_thread_id : payload.review_thread_id,
+    reviewer_user_id:
+      payload.reviewer_user_id === undefined ? current.reviewer_user_id : payload.reviewer_user_id,
+    review_action:
+      payload.review_action === undefined ? current.review_action : payload.review_action,
+    review_notes:
+      payload.review_notes === undefined ? current.review_notes : payload.review_notes,
+    updated_at: Date.now()
+  });
+  return getApplicationSubmission(id);
+}
+
+function getActiveApplicationSubmissionForUser(userId, guildId) {
+  return normalizeApplicationSubmissionRow(
+    getActiveApplicationSubmissionForUserStmt.get(String(userId || ""), String(guildId || ""))
+  );
+}
+
+function getLatestApplicationSubmissionForUserType(userId, guildId, applicationKey) {
+  return normalizeApplicationSubmissionRow(
+    getLatestApplicationSubmissionForUserTypeStmt.get(
+      String(userId || ""),
+      String(guildId || ""),
+      String(applicationKey || "")
+    )
+  );
+}
+
+function expireDueApplicationSubmissions(now = Date.now()) {
+  const rows = listDueExpiredApplicationSubmissionsStmt.all(Number(now));
+  const tx = db.transaction((items) => {
+    for (const row of items) {
+      updateApplicationSubmissionStmt.run({
+        id: Number(row.id),
+        status: "expired",
+        answers_json: row.answers_json,
+        current_question_index: Number(row.current_question_index || 0),
+        expires_at: row.expires_at ? Number(row.expires_at) : null,
+        submitted_at: row.submitted_at ? Number(row.submitted_at) : null,
+        review_channel_id: row.review_channel_id || null,
+        review_message_id: row.review_message_id || null,
+        review_thread_id: row.review_thread_id || null,
+        reviewer_user_id: row.reviewer_user_id || null,
+        review_action: row.review_action || null,
+        review_notes: row.review_notes || null,
+        updated_at: Number(now)
+      });
+    }
+  });
+  tx(rows);
+  return rows.map(row => getApplicationSubmission(row.id)).filter(Boolean);
 }
 
 // ---------- EXPORTS ----------
@@ -2018,6 +2430,15 @@ module.exports = {
   upsertChecklistPanel,
   listChecklistPanels,
   deleteChecklistPanel,
+  getApplicationConfig,
+  listApplicationConfigs,
+  upsertApplicationConfig,
+  createApplicationSubmission,
+  getApplicationSubmission,
+  updateApplicationSubmission,
+  getActiveApplicationSubmissionForUser,
+  getLatestApplicationSubmissionForUserType,
+  expireDueApplicationSubmissions,
 
   // fortnite links
   getFortniteLink,
