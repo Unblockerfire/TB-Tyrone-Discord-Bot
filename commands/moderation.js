@@ -6,6 +6,14 @@ const {
   ButtonStyle,
   PermissionsBitField
 } = require("discord.js");
+const {
+  canUseWarn,
+  canUseTimeout,
+  canUseRequestKick,
+  canUseModInterestPanel,
+  canUseRevokeStrike,
+  canUseKickApproval
+} = require("./moderationPermissions");
 
 // ---------- TEMP DISPUTE STORAGE ----------
 const pendingStrikeDisputes = new Map();
@@ -85,20 +93,6 @@ function userHasRole(member, roleId) {
 
 function userHasAnyRole(member, roleIds) {
   return roleIds.some(id => member?.roles?.cache?.has(id));
-}
-
-function canUseTimeout(member) {
-  if (!member) return false;
-  if (member.permissions?.has?.(PermissionsBitField.Flags.ModerateMembers)) return true;
-  if (member.permissions?.has?.(PermissionsBitField.Flags.ManageGuild)) return true;
-
-  const allowedRoleIds = [
-    process.env.STAFF_ROLE_ID || "",
-    process.env.ADMIN_ROLE_ID || "",
-    "1113158001604427966"
-  ].filter(Boolean);
-
-  return userHasAnyRole(member, allowedRoleIds);
 }
 
 function parseTimeoutDuration(input) {
@@ -499,17 +493,8 @@ async function runTyroneCleanup({ client, guild, sourceChannel, skipMessageId = 
 // ---------- /warn IMPLEMENTATION ----------
 
 async function handleWarn(interaction, { db }) {
-  const staffRoleId = process.env.STAFF_ROLE_ID;
-
-  if (!staffRoleId) {
-    return interaction.reply({
-      content: "Bot is not configured correctly, missing STAFF_ROLE_ID.",
-      ephemeral: true
-    });
-  }
-
   const member = interaction.member;
-  if (!userHasRole(member, staffRoleId)) {
+  if (!canUseWarn(member)) {
     return interaction.reply({
       content: "You do not have permission to use this command.",
       ephemeral: true
@@ -715,19 +700,17 @@ async function handleStrikes(interaction, { db }) {
 // ---------- /request-kick IMPLEMENTATION ----------
 
 async function handleRequestKick(interaction, { client, db }) {
-  const staffRoleId = process.env.STAFF_ROLE_ID;
   const requestChannelId = process.env.REQUEST_CHANNEL_ID;
 
-  if (!staffRoleId || !requestChannelId) {
+  if (!requestChannelId) {
     return interaction.reply({
-      content:
-        "Bot is not configured correctly, missing STAFF_ROLE_ID or REQUEST_CHANNEL_ID.",
+      content: "Bot is not configured correctly, missing REQUEST_CHANNEL_ID.",
       ephemeral: true
     });
   }
 
   const member = interaction.member;
-  if (!userHasRole(member, staffRoleId)) {
+  if (!canUseRequestKick(member)) {
     return interaction.reply({
       content: "You do not have permission to use this command.",
       ephemeral: true
@@ -806,12 +789,7 @@ async function handleRequestKick(interaction, { client, db }) {
 // ---------- /mod-interest-panel IMPLEMENTATION ----------
 
 async function handleModInterestPanel(interaction) {
-  const approverRoleIds = (process.env.APPROVER_ROLE_IDS || "")
-    .split(",")
-    .map(s => s.trim())
-    .filter(Boolean);
-
-  if (!userHasAnyRole(interaction.member, approverRoleIds)) {
+  if (!canUseModInterestPanel(interaction.member)) {
     return interaction.reply({
       content: "You do not have permission to post the mod interest panel.",
       ephemeral: true
@@ -882,16 +860,7 @@ async function handleAutofill(interaction) {
 // ---------- /revokestrike IMPLEMENTATION ----------
 
 async function handleRevokeStrike(interaction, { db }) {
-  const adminRoleId = process.env.ADMIN_ROLE_ID;
-
-  if (!adminRoleId) {
-    return interaction.reply({
-      content: "Bot is missing ADMIN_ROLE_ID in the environment.",
-      ephemeral: true
-    });
-  }
-
-  if (!userHasRole(interaction.member, adminRoleId)) {
+  if (!canUseRevokeStrike(interaction.member)) {
     return interaction.reply({
       content: "Only admins can use /revokestrike.",
       ephemeral: true
@@ -1032,7 +1001,7 @@ async function handleKickButtons(interaction) {
     });
   }
 
-  if (!userHasAnyRole(member, approverRoleIds)) {
+  if (!canUseKickApproval(member)) {
     return interaction.reply({
       content: "You do not have permission to approve or decline this request.",
       ephemeral: true

@@ -30,6 +30,7 @@ const bangCommands = require("./commands/bangCommands");
 const requests = require("./commands/requests");
 const staffPanels = require("./commands/staffPanels");
 const communityPosts = require("./commands/communityPosts");
+const { slashCommandRouteMap } = require("./slashCommandRoutes");
 
 const MEE6_BOT_ID = "159985870458322944";
 const MEE6_ACHIEVEMENT_FORWARD_CHANNEL_ID = "1478930416097562728";
@@ -43,6 +44,21 @@ const MEE6_IGNORED_CHANNEL_IDS = new Set([
   "1113482300915732651"
 ]);
 const mee6PendingForwards = new Map();
+const slashCommandModules = {
+  moderation,
+  status,
+  notifyRoles,
+  tickets,
+  roleSelect,
+  privateVc,
+  bangCommands,
+  requests,
+  communityPosts,
+  staffPanels,
+  leaderboard,
+  fortniteQueue,
+  tyrone
+};
 
 function getMee6ControlRoleIds() {
   return [
@@ -445,101 +461,28 @@ client.once("clientReady", () => {
 client.on("interactionCreate", async (interaction) => {
   try {
     if (interaction.isChatInputCommand()) {
-      switch (interaction.commandName) {
-        // Moderation
-        case "warn":
-        case "strikes":
-        case "request-kick":
-        case "mod-interest-panel":
-        case "autofill":
-        case "revokestrike":
-          await moderation.handleInteraction(interaction, { client, db });
-          return;
+      const route = slashCommandRouteMap[interaction.commandName];
+      if (route) {
+        const targetModule = slashCommandModules[route.moduleKey];
+        const handler = targetModule?.[route.handlerName];
 
-        // Status
-        case "set-status":
-        case "clear-status":
-          await status.handleInteraction(interaction, { client, db });
-          return;
-
-        // Rules + Verify setup
-        case "setup-rules-verify":
-          await notifyRoles.handleInteraction(interaction, { client, db });
-          return;
-
-        // Notification role panels
-        case "setup-live":
-        case "setup-chat":
-        case "setup-giveaways":
-        case "setup-announcements":
-        case "setup-party":
-        case "setup-notify-all":
-          await roleSelect.handleInteraction(interaction, { client, db });
-          return;
-
-        case "setup-private-vc-panel":
-        case "private-vc-status":
-          await privateVc.handleInteraction(interaction, { client, db });
-          return;
-
-        case "bang-commands":
-          await bangCommands.handleInteraction(interaction, { client, db });
-          return;
-
-        case "setup-requests":
-          await requests.handleInteraction(interaction, { client, db });
-          return;
-
-        case "setup-shoutout":
-          await communityPosts.handleInteraction(interaction, { client, db });
-          return;
-
-        case "tyrone-cleanup-setup":
-        case "checklist-setup":
-          await staffPanels.handleInteraction(interaction, { client, db });
-          return;
-
-        // Leaderboard
-        case "setup-leaderboard":
-        case "leaderboard-add":
-        case "leaderboard-set":
-        case "leaderboard-remove":
-        case "leaderboard-add-likes":
-        case "leaderboard-set-likes":
-        case "leaderboard-reset":
-        case "leaderboard-update":
-          await leaderboard.handleInteraction(interaction, { client, db });
-          return;
-
-        // Fortnite queue
-        case "setup-fort-verify-panel":
-        case "setup-fort-ready-panel":
-        case "setup-fort-queue-display":
-        case "fort-queue-open":
-        case "fort-queue-close":
-        case "fort-queue-status":
-        case "fort-queue-next":
-        case "fort-queue-remove":
-          await fortniteQueue.handleInteraction(interaction, { client, db });
-          return;
-
-        // Tyrone issue report
-        case "report-issue":
-        case "report":
-          await tyrone.handleInteraction(interaction, { client, db });
-          return;
-
-        // Tickets
-        default: {
-          const handledByTickets =
-            tickets && typeof tickets.handleInteraction === "function"
-              ? await tickets.handleInteraction(interaction, { client, db })
-              : false;
-
-          if (handledByTickets) return;
-          return;
+        if (typeof handler !== "function") {
+          throw new Error(
+            `Missing slash command handler for ${interaction.commandName}: ${route.moduleKey}.${route.handlerName}`
+          );
         }
+
+        await handler(interaction, { client, db });
+        return;
       }
+
+      const handledByTickets =
+        tickets && typeof tickets.handleInteraction === "function"
+          ? await tickets.handleInteraction(interaction, { client, db })
+          : false;
+
+      if (handledByTickets) return;
+      return;
     }
 
     if (interaction.isButton()) {
