@@ -53,6 +53,8 @@ const JANITOR_INTERVAL_MINUTES = Number(process.env.TICKET_JANITOR_INTERVAL_MINU
 
 // Owner role allowed to run setup-support-panel
 const OWNER_ROLE_ID = "1113158001604427966"; // your owner role ID (as you asked)
+const SUPPORT_PANEL_CHANNEL_KEY = "support.panel.channel_id";
+const SUPPORT_PANEL_MESSAGE_KEY = "support.panel.message_id";
 
 // ---------- In-memory runtime state ----------
 // tracks first-message prompt + inactivity timers by ticket channel id
@@ -276,6 +278,46 @@ function supportPanelRow() {
       .setLabel("Get Support")
       .setStyle(ButtonStyle.Success)
   );
+}
+
+function buildSupportPanelPayload() {
+  const embed = new EmbedBuilder()
+    .setTitle("Support Tickets")
+    .setDescription("Click **Get Support** to open a private ticket with staff.")
+    .setColor(0x2ecc71);
+
+  return {
+    embeds: [embed],
+    components: [supportPanelRow()]
+  };
+}
+
+async function refreshSupportPanel(client, db, { reason = "manual_refresh" } = {}) {
+  const targetChannelId = db?.getAppSetting?.(SUPPORT_PANEL_CHANNEL_KEY)?.value || SUPPORT_PANEL_CHANNEL_ID;
+  const existingMessageId = db?.getAppSetting?.(SUPPORT_PANEL_MESSAGE_KEY)?.value || null;
+  if (!targetChannelId) return false;
+
+  const channel = await client.channels.fetch(targetChannelId).catch(() => null);
+  if (!channel?.isTextBased?.()) return false;
+
+  if (existingMessageId) {
+    const oldMessage = await channel.messages.fetch(existingMessageId).catch(() => null);
+    if (oldMessage) {
+      await oldMessage.delete().catch(() => null);
+    }
+  }
+
+  const sent = await channel.send(buildSupportPanelPayload());
+  db?.setManyAppSettings?.({
+    [SUPPORT_PANEL_CHANNEL_KEY]: channel.id,
+    [SUPPORT_PANEL_MESSAGE_KEY]: sent.id
+  });
+
+  console.log(
+    "[Tickets] Support panel refreshed",
+    JSON.stringify({ reason, channel_id: channel.id, message_id: sent.id })
+  );
+  return true;
 }
 
 function resetInactivityTimers(guild, channel, openerId) {
@@ -636,14 +678,22 @@ async function handleInteraction(interaction, { client, db }) {
       });
     }
 
-    const embed = new EmbedBuilder()
-      .setTitle("Support Tickets")
-      .setDescription("Click **Get Support** to open a private ticket with staff.")
-      .setColor(0x2ecc71);
+    const existingChannelId = db?.getAppSetting?.(SUPPORT_PANEL_CHANNEL_KEY)?.value || interaction.channelId;
+    const existingMessageId = db?.getAppSetting?.(SUPPORT_PANEL_MESSAGE_KEY)?.value || null;
+    if (existingMessageId) {
+      const priorChannel = await interaction.guild.channels.fetch(existingChannelId).catch(() => null);
+      const priorMessage = priorChannel?.messages
+        ? await priorChannel.messages.fetch(existingMessageId).catch(() => null)
+        : null;
+      if (priorMessage) {
+        await priorMessage.delete().catch(() => null);
+      }
+    }
 
-    await interaction.channel.send({
-      embeds: [embed],
-      components: [supportPanelRow()]
+    const posted = await interaction.channel.send(buildSupportPanelPayload());
+    db?.setManyAppSettings?.({
+      [SUPPORT_PANEL_CHANNEL_KEY]: posted.channelId,
+      [SUPPORT_PANEL_MESSAGE_KEY]: posted.id
     });
 
     return interaction.reply({
@@ -1469,5 +1519,6 @@ module.exports = {
   handleMessage,
   startTicketJanitor,
   createTyroneFeedbackTicket,
-  createStructuredSupportTicket
+  createStructuredSupportTicket,
+  refreshSupportPanel
 };

@@ -12,6 +12,11 @@ const {
 } = require("discord.js");
 
 const moderation = require("./moderation");
+const applications = require("./applications");
+const notifyRoles = require("./notifyRoles");
+const privateVc = require("./privateVc");
+const requests = require("./requests");
+const tickets = require("./tickets");
 
 const OWNER_ROLE_ID = "1113158001604427966";
 const TYRONE_CLEANUP_ALLOWED_ROLE_ID = "1112945506549768302";
@@ -23,8 +28,14 @@ const CHECKLIST_CUSTOM_ID_REMOVE_SELECT = "checklist_remove_select";
 const CHECKLIST_ADD_MODAL_ID = "checklist_add_modal";
 const CHECKLIST_ADD_MODAL_INPUT_ID = "checklist_add_modal_text";
 const TYRONE_CLEANUP_BUTTON_ID = "tyrone_cleanup_run";
+const TYRONE_BUTTON_REFRESH_CHANNEL_KEY = "tyrone_buttons.cleanup.channel_id";
+const TYRONE_BUTTON_REFRESH_MESSAGE_KEY = "tyrone_buttons.cleanup.message_id";
+const TYRONE_BUTTON_REFRESH_LAST_DATE_KEY = "tyrone_buttons.last_refresh_date";
+const TYRONE_BUTTON_REFRESH_TIMEZONE = "America/Boise";
+const TYRONE_BUTTON_REFRESH_HOUR = 7;
 
 let checklistTickerStarted = false;
+let buttonRefreshTickerStarted = false;
 
 function getStaffRoleIds() {
   return [
@@ -71,6 +82,100 @@ function buildCleanupComponents() {
         .setStyle(ButtonStyle.Danger)
     )
   ];
+}
+
+function buildCleanupPayload() {
+  return {
+    embeds: [buildCleanupEmbed()],
+    components: buildCleanupComponents()
+  };
+}
+
+function getBoiseDateParts(date = new Date()) {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: TYRONE_BUTTON_REFRESH_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  });
+
+  const parts = Object.fromEntries(
+    formatter.formatToParts(date).map(part => [part.type, part.value])
+  );
+
+  return {
+    dateKey: `${parts.year}-${parts.month}-${parts.day}`,
+    hour: Number(parts.hour),
+    minute: Number(parts.minute)
+  };
+}
+
+async function refreshCleanupPanel(client, db, { reason = "manual_refresh" } = {}) {
+  const targetChannelId =
+    db?.getAppSetting?.(TYRONE_BUTTON_REFRESH_CHANNEL_KEY)?.value ||
+    moderation.TYRONE_CLEANUP_PANEL_CHANNEL_ID;
+  const existingMessageId = db?.getAppSetting?.(TYRONE_BUTTON_REFRESH_MESSAGE_KEY)?.value || null;
+  const channel = await client.channels.fetch(targetChannelId).catch(() => null);
+  if (!channel?.isTextBased?.()) return false;
+
+  if (existingMessageId) {
+    const oldMessage = await channel.messages.fetch(existingMessageId).catch(() => null);
+    if (oldMessage) {
+      await oldMessage.delete().catch(() => null);
+    }
+  }
+
+  const posted = await channel.send(buildCleanupPayload());
+  db?.setManyAppSettings?.({
+    [TYRONE_BUTTON_REFRESH_CHANNEL_KEY]: posted.channelId,
+    [TYRONE_BUTTON_REFRESH_MESSAGE_KEY]: posted.id
+  });
+
+  console.log(
+    "[Tyrone Buttons] Cleanup panel refreshed",
+    JSON.stringify({ reason, channel_id: posted.channelId, message_id: posted.id })
+  );
+  return true;
+}
+
+async function refreshTrackedTyroneButtons(client, db, { reason = "manual_refresh", force = false } = {}) {
+  const now = getBoiseDateParts();
+  const lastRefreshDate = db?.getAppSetting?.(TYRONE_BUTTON_REFRESH_LAST_DATE_KEY)?.value || null;
+  if (!force && (now.hour < TYRONE_BUTTON_REFRESH_HOUR || lastRefreshDate === now.dateKey)) {
+    return false;
+  }
+
+  const tasks = [
+    () => notifyRoles.runDailyVerifyRefresh?.(client, db, { force: true }),
+    () => applications.refreshApplicationPanel?.(client, db, { reason }),
+    () => requests.refreshRequestPanel?.(client, db, { reason }),
+    () => tickets.refreshSupportPanel?.(client, db, { reason }),
+    () => privateVc.refreshPrivateVcPanel?.(client, db, { reason }),
+    () => refreshCleanupPanel(client, db, { reason })
+  ];
+
+  for (const task of tasks) {
+    try {
+      if (typeof task === "function") {
+        await task();
+      }
+    } catch (error) {
+      console.error("[Tyrone Buttons] Refresh task failed:", error);
+    }
+  }
+
+  db?.setManyAppSettings?.({
+    [TYRONE_BUTTON_REFRESH_LAST_DATE_KEY]: now.dateKey
+  });
+
+  console.log(
+    "[Tyrone Buttons] Refreshed tracked panels",
+    JSON.stringify({ reason, date_key: now.dateKey, hour: now.hour })
+  );
+  return true;
 }
 
 function buildChecklistEmbed(db) {
@@ -177,6 +282,27 @@ function startChecklistTicker(client, db) {
   }, 60 * 1000);
 }
 
+function startButtonRefreshTicker(client, db) {
+  if (buttonRefreshTickerStarted) return;
+  buttonRefreshTickerStarted = true;
+
+  refreshTrackedTyroneButtons(client, db, {
+    reason: "startup_check",
+    force: false
+  }).catch(error => {
+    console.error("[Tyrone Buttons] Initial refresh check failed:", error);
+  });
+
+  setInterval(() => {
+    refreshTrackedTyroneButtons(client, db, {
+      reason: "daily_ticker",
+      force: false
+    }).catch(error => {
+      console.error("[Tyrone Buttons] Daily refresh failed:", error);
+    });
+  }, 60 * 60 * 1000);
+}
+
 async function handleInteraction(interaction, { client, db }) {
   if (!interaction.isChatInputCommand()) return false;
 
@@ -202,15 +328,47 @@ async function handleInteraction(interaction, { client, db }) {
       return true;
     }
 
-    await interaction.channel.send({
-      embeds: [buildCleanupEmbed()],
-      components: buildCleanupComponents()
+    const existingMessageId = db?.getAppSetting?.(TYRONE_BUTTON_REFRESH_MESSAGE_KEY)?.value || null;
+    if (existingMessageId) {
+      const oldMessage = await interaction.channel.messages.fetch(existingMessageId).catch(() => null);
+      if (oldMessage) {
+        await oldMessage.delete().catch(() => null);
+      }
+    }
+
+    const posted = await interaction.channel.send(buildCleanupPayload());
+    db?.setManyAppSettings?.({
+      [TYRONE_BUTTON_REFRESH_CHANNEL_KEY]: posted.channelId,
+      [TYRONE_BUTTON_REFRESH_MESSAGE_KEY]: posted.id
     });
 
     await interaction.reply({
       content: "Tyrone cleanup panel posted ✅",
       flags: MessageFlags.Ephemeral
     });
+    return true;
+  }
+
+  if (interaction.commandName === "refresh-tyrone-buttons") {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: "Server-only command.", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+
+    if (!canManageStaffPanels(interaction.member)) {
+      await interaction.reply({
+        content: "You do not have permission to refresh Tyrone panels.",
+        flags: MessageFlags.Ephemeral
+      });
+      return true;
+    }
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    await refreshTrackedTyroneButtons(client, db, {
+      reason: "manual_command",
+      force: true
+    });
+    await interaction.editReply("Tyrone buttons refreshed ✅");
     return true;
   }
 
@@ -399,5 +557,8 @@ module.exports = {
   handleButton,
   handleSelectMenu,
   handleModalSubmit,
-  startChecklistTicker
+  startChecklistTicker,
+  startButtonRefreshTicker,
+  refreshTrackedTyroneButtons,
+  refreshCleanupPanel
 };

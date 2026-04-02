@@ -461,5 +461,6 @@ async function handleButton(interaction) {
 module.exports = {
   handleInteraction,
   handleButton,
-  startRulesVerifyTicker
+  startRulesVerifyTicker,
+  runDailyVerifyRefresh
 };

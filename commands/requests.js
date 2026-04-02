@@ -16,6 +16,8 @@ const REQUEST_SETUP_CHANNEL_ID = "1484185860269281390";
 const REQUEST_ALERT_CHANNEL_ID = "1119473863902896248";
 const VERIFIED_ROLE_ID = "1113560011193450536";
 const OWNER_ROLE_ID = "1113158001604427966";
+const REQUEST_PANEL_CHANNEL_KEY = "requests.panel.channel_id";
+const REQUEST_PANEL_MESSAGE_KEY = "requests.panel.message_id";
 
 const REQUEST_SELECT_ID = "tyrone_request_select";
 const REQUEST_OTHER_MODAL_ID = "tyrone_request_other_modal";
@@ -109,6 +111,13 @@ function buildPanelComponents() {
         )
     )
   ];
+}
+
+function buildPanelPayload() {
+  return {
+    embeds: [buildPanelEmbed()],
+    components: buildPanelComponents()
+  };
 }
 
 function getOptionConfig(value) {
@@ -231,7 +240,7 @@ async function createRequestTicket({ interaction, option, summary, issueText, aw
   return result;
 }
 
-async function handleInteraction(interaction) {
+async function handleInteraction(interaction, { db } = {}) {
   if (!interaction.isChatInputCommand()) return false;
   if (interaction.commandName !== "setup-requests") return false;
 
@@ -259,9 +268,22 @@ async function handleInteraction(interaction) {
     return true;
   }
 
-  await interaction.channel.send({
-    embeds: [buildPanelEmbed()],
-    components: buildPanelComponents()
+  const existingChannelId = db?.getAppSetting?.(REQUEST_PANEL_CHANNEL_KEY)?.value || null;
+  const existingMessageId = db?.getAppSetting?.(REQUEST_PANEL_MESSAGE_KEY)?.value || null;
+  if (existingChannelId && existingMessageId) {
+    const priorChannel = await interaction.guild.channels.fetch(existingChannelId).catch(() => null);
+    const priorMessage = priorChannel?.messages
+      ? await priorChannel.messages.fetch(existingMessageId).catch(() => null)
+      : null;
+    if (priorMessage) {
+      await priorMessage.delete().catch(() => null);
+    }
+  }
+
+  const posted = await interaction.channel.send(buildPanelPayload());
+  db?.setManyAppSettings?.({
+    [REQUEST_PANEL_CHANNEL_KEY]: posted.channelId,
+    [REQUEST_PANEL_MESSAGE_KEY]: posted.id
   });
 
   console.log(
@@ -434,5 +456,30 @@ async function handleModalSubmit(interaction, { db }) {
 module.exports = {
   handleInteraction,
   handleSelectMenu,
-  handleModalSubmit
+  handleModalSubmit,
+  refreshRequestPanel: async (client, db, { reason = "manual_refresh" } = {}) => {
+    const storedChannelId = db?.getAppSetting?.(REQUEST_PANEL_CHANNEL_KEY)?.value || REQUEST_SETUP_CHANNEL_ID;
+    const storedMessageId = db?.getAppSetting?.(REQUEST_PANEL_MESSAGE_KEY)?.value || null;
+    const channel = await client.channels.fetch(storedChannelId).catch(() => null);
+    if (!channel?.isTextBased?.()) return false;
+
+    if (storedMessageId) {
+      const priorMessage = await channel.messages.fetch(storedMessageId).catch(() => null);
+      if (priorMessage) {
+        await priorMessage.delete().catch(() => null);
+      }
+    }
+
+    const posted = await channel.send(buildPanelPayload());
+    db?.setManyAppSettings?.({
+      [REQUEST_PANEL_CHANNEL_KEY]: posted.channelId,
+      [REQUEST_PANEL_MESSAGE_KEY]: posted.id
+    });
+
+    console.log(
+      "[Requests] Panel refreshed",
+      JSON.stringify({ reason, channel_id: posted.channelId, message_id: posted.id })
+    );
+    return true;
+  }
 };

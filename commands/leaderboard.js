@@ -10,27 +10,54 @@ const OWNER_ROLE_ID = "1113158001604427966";
 const LEADERBOARD_MANAGER_ROLE_ID = "1113090317592309800";
 
 const DATA_PATH = path.join(__dirname, "..", "leaderboard-data.json");
+const DATA_BACKUP_PATH = path.join(__dirname, "..", "leaderboard-data.backup.json");
+const DATA_TEMP_PATH = path.join(__dirname, "..", "leaderboard-data.tmp.json");
 
-// ---------- DATA ----------
-function loadData() {
+function normalizeDataShape(parsed = {}) {
+  return {
+    setupMessageId: parsed.setupMessageId || null,
+    displayMessageId: parsed.displayMessageId || null,
+    entries: Array.isArray(parsed.entries) ? parsed.entries : []
+  };
+}
+
+function tryReadData(filePath) {
+  if (!fs.existsSync(filePath)) return null;
   try {
-    if (!fs.existsSync(DATA_PATH)) {
-      return { setupMessageId: null, displayMessageId: null, entries: [] };
-    }
-
-    const parsed = JSON.parse(fs.readFileSync(DATA_PATH, "utf8"));
-    return {
-      setupMessageId: parsed.setupMessageId || null,
-      displayMessageId: parsed.displayMessageId || null,
-      entries: Array.isArray(parsed.entries) ? parsed.entries : []
-    };
+    return normalizeDataShape(JSON.parse(fs.readFileSync(filePath, "utf8")));
   } catch {
-    return { setupMessageId: null, displayMessageId: null, entries: [] };
+    return null;
   }
 }
 
+// ---------- DATA ----------
+function loadData() {
+  const primary = tryReadData(DATA_PATH);
+  if (primary) return primary;
+
+  const backup = tryReadData(DATA_BACKUP_PATH);
+  if (backup) {
+    try {
+      fs.writeFileSync(DATA_PATH, JSON.stringify(backup, null, 2));
+    } catch {}
+    return backup;
+  }
+
+  return { setupMessageId: null, displayMessageId: null, entries: [] };
+}
+
 function saveData(data) {
-  fs.writeFileSync(DATA_PATH, JSON.stringify(data, null, 2));
+  const normalized = normalizeDataShape(data);
+  const payload = JSON.stringify(normalized, null, 2);
+
+  if (fs.existsSync(DATA_PATH)) {
+    try {
+      fs.copyFileSync(DATA_PATH, DATA_BACKUP_PATH);
+    } catch {}
+  }
+
+  fs.writeFileSync(DATA_TEMP_PATH, payload);
+  fs.renameSync(DATA_TEMP_PATH, DATA_PATH);
 }
 
 function sortEntries(entries) {

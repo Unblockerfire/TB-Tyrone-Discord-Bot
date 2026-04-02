@@ -19,6 +19,8 @@ const PRIVATE_VC_BYPASS_ROLE_IDS = (process.env.PRIVATE_VC_BYPASS_ROLE_IDS || ""
   .map(value => value.trim())
   .filter(Boolean);
 const PRIVATE_VC_TIMEZONE = process.env.PRIVATE_VC_TIMEZONE || "America/Phoenix";
+const PRIVATE_VC_PANEL_CHANNEL_KEY = "private_vc.panel.channel_id";
+const PRIVATE_VC_PANEL_MESSAGE_KEY = "private_vc.panel.message_id";
 
 const pendingLockRequests = new Map();
 let janitorStarted = false;
@@ -37,6 +39,41 @@ function createPanelComponents() {
         .setStyle(ButtonStyle.Secondary)
     )
   ];
+}
+
+function buildPrivateVcPanelPayload() {
+  return {
+    content:
+      "**Private VC Panel**\n" +
+      "Click the button below to make your own private VC. Tyrone will create it, move you if possible, and let you invite people.",
+    components: createPanelComponents()
+  };
+}
+
+async function refreshPrivateVcPanel(client, db, { reason = "manual_refresh" } = {}) {
+  const targetChannelId = db?.getAppSetting?.(PRIVATE_VC_PANEL_CHANNEL_KEY)?.value || PRIVATE_VC_CREATE_CHANNEL_ID;
+  const existingMessageId = db?.getAppSetting?.(PRIVATE_VC_PANEL_MESSAGE_KEY)?.value || null;
+  const channel = await client.channels.fetch(targetChannelId).catch(() => null);
+  if (!channel?.isTextBased?.()) return false;
+
+  if (existingMessageId) {
+    const oldMessage = await channel.messages.fetch(existingMessageId).catch(() => null);
+    if (oldMessage) {
+      await oldMessage.delete().catch(() => null);
+    }
+  }
+
+  const posted = await channel.send(buildPrivateVcPanelPayload());
+  db?.setManyAppSettings?.({
+    [PRIVATE_VC_PANEL_CHANNEL_KEY]: posted.channelId,
+    [PRIVATE_VC_PANEL_MESSAGE_KEY]: posted.id
+  });
+
+  console.log(
+    "[Private VC] Panel refreshed",
+    JSON.stringify({ reason, channel_id: posted.channelId, message_id: posted.id })
+  );
+  return true;
 }
 
 function buildPrivateVcStatusLines(db) {
@@ -486,11 +523,29 @@ async function handleInteraction(interaction, { db }) {
     return true;
   }
 
-  await interaction.channel.send({
-    content:
-      "**Private VC Panel**\n" +
-      "Click the button below to make your own private VC. Tyrone will create it, move you if possible, and let you invite people.",
-    components: createPanelComponents()
+  const existingChannelId = db?.getAppSetting?.(PRIVATE_VC_PANEL_CHANNEL_KEY)?.value || interaction.channelId;
+  const existingMessageId = db?.getAppSetting?.(PRIVATE_VC_PANEL_MESSAGE_KEY)?.value || null;
+  if (existingMessageId) {
+    const oldChannel = await interaction.guild.channels.fetch(existingChannelId).catch(() => null);
+    const oldMessage = oldChannel?.messages
+      ? await oldChannel.messages.fetch(existingMessageId).catch(() => null)
+      : null;
+    if (oldMessage) {
+      await oldMessage.delete().catch(() => null);
+    }
+  }
+
+  if (existingMessageId && existingChannelId === interaction.channelId) {
+    const oldMessage = await interaction.channel.messages.fetch(existingMessageId).catch(() => null);
+    if (oldMessage) {
+      await oldMessage.delete().catch(() => null);
+    }
+  }
+
+  const posted = await interaction.channel.send(buildPrivateVcPanelPayload());
+  db?.setManyAppSettings?.({
+    [PRIVATE_VC_PANEL_CHANNEL_KEY]: posted.channelId,
+    [PRIVATE_VC_PANEL_MESSAGE_KEY]: posted.id
   });
 
   await interaction.reply({
@@ -930,5 +985,6 @@ module.exports = {
   handleSelectMenu,
   handleMessage,
   handleVoiceStateUpdate,
-  startPrivateVcJanitor
+  startPrivateVcJanitor,
+  refreshPrivateVcPanel
 };

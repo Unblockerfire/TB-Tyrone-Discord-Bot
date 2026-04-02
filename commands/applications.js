@@ -12,6 +12,7 @@ const {
   TextInputBuilder,
   TextInputStyle
 } = require("discord.js");
+const tickets = require("./tickets");
 
 const APPLICATION_CHANNEL_ID = "1113094456242081832";
 const VERIFIED_ROLE_ID = "1113560011193450536";
@@ -30,6 +31,7 @@ const CONFIRM_PREFIX = "application:confirm:";
 const RESUME_PREFIX = "application:resume:";
 const CANCEL_PREFIX = "application:cancel:";
 const QUESTION_PREFIX = "application:question:";
+const HELP_PREFIX = "application:help:";
 const QUESTION_MODAL_PREFIX = "application:answer:";
 const REVIEW_ACCEPT_PREFIX = "application:review:accept:";
 const REVIEW_DENY_PREFIX = "application:review:deny:";
@@ -41,6 +43,7 @@ const ADMIN_EDIT_MESSAGES_PREFIX = "edit_messages:";
 const ADMIN_EDIT_ROLES_A_PREFIX = "edit_roles_a:";
 const ADMIN_EDIT_ROLES_B_PREFIX = "edit_roles_b:";
 const ADMIN_EDIT_TIMING_PREFIX = "edit_timing:";
+const HELP_PAUSE_MS = 2 * 60 * 60 * 1000;
 let applicationTickerStarted = false;
 
 function getDefaultManagerRoles() {
@@ -343,7 +346,7 @@ function buildApplicationPanel() {
     .setTitle("Staff Applications")
     .setColor(0x5865f2)
     .setDescription(
-      "Use the button below to start a Tyrone application.\n\n" +
+      "Use the button below to start an application for this server.\n\n" +
       "You must be verified to apply. Tyrone will guide you through the questions and send your submission to staff for review."
     );
 
@@ -405,9 +408,13 @@ function buildQuestionRow(submissionId) {
       .setLabel("Answer Question")
       .setStyle(ButtonStyle.Primary),
     new ButtonBuilder()
+      .setCustomId(`${HELP_PREFIX}${submissionId}`)
+      .setLabel("Help")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
       .setCustomId(`${CANCEL_PREFIX}${submissionId}`)
       .setLabel("Cancel Application")
-      .setStyle(ButtonStyle.Secondary)
+      .setStyle(ButtonStyle.Danger)
   );
 }
 
@@ -1064,6 +1071,33 @@ async function postApplicationPanel(interaction, db) {
   );
 }
 
+async function refreshApplicationPanel(client, db, { reason = "manual_refresh" } = {}) {
+  const existingChannelId = db.getAppSetting(APPLICATION_PANEL_CHANNEL_ID_KEY)?.value || null;
+  const existingMessageId = db.getAppSetting(APPLICATION_PANEL_MESSAGE_ID_KEY)?.value || null;
+  const targetChannelId = existingChannelId || APPLICATION_CHANNEL_ID;
+  const channel = await client.channels.fetch(targetChannelId).catch(() => null);
+  if (!channel?.isTextBased?.()) return false;
+
+  if (existingMessageId) {
+    const oldMessage = await channel.messages.fetch(existingMessageId).catch(() => null);
+    if (oldMessage) {
+      await oldMessage.delete().catch(() => null);
+    }
+  }
+
+  const sent = await channel.send(buildApplicationPanel());
+  db.setManyAppSettings({
+    [APPLICATION_PANEL_CHANNEL_ID_KEY]: channel.id,
+    [APPLICATION_PANEL_MESSAGE_ID_KEY]: sent.id
+  });
+
+  console.log(
+    "[Applications] Panel refreshed",
+    JSON.stringify({ reason, channel_id: channel.id, message_id: sent.id })
+  );
+  return true;
+}
+
 async function handleInteraction(interaction, { db }) {
   if (!interaction.isChatInputCommand()) return false;
 
@@ -1142,6 +1176,18 @@ async function handleButton(interaction, { client, db }) {
       return true;
     }
 
+    if (activeSubmission && activeSubmission.status === "paused_help") {
+      const config = db.getApplicationConfig(activeSubmission.application_key);
+      await interaction.reply({
+        content:
+          `Your **${config?.display_name || activeSubmission.application_key}** is paused while Tyrone support helps you.\n` +
+          `You can resume it within **${formatDuration(Math.max(0, (activeSubmission.expires_at || 0) - Date.now()))}** or cancel it.`,
+        components: [buildResumeRow(activeSubmission.id)],
+        flags: MessageFlags.Ephemeral
+      });
+      return true;
+    }
+
     await interaction.reply({
       content: "Choose which application you want to start:",
       components: [buildTypeSelect(ensureApplicationDefaults(db))],
@@ -1191,7 +1237,7 @@ async function handleButton(interaction, { client, db }) {
 
   if (customId.startsWith(RESUME_PREFIX)) {
     const submissionId = Number(customId.slice(RESUME_PREFIX.length));
-    const submission = await expireSubmissionIfNeeded(db, db.getApplicationSubmission(submissionId));
+    let submission = await expireSubmissionIfNeeded(db, db.getApplicationSubmission(submissionId));
     if (!submission || submission.user_id !== interaction.user.id) {
       await interaction.reply({ content: "That application could not be resumed.", flags: MessageFlags.Ephemeral });
       return true;
@@ -1199,6 +1245,17 @@ async function handleButton(interaction, { client, db }) {
     if (submission.status === "expired") {
       await interaction.reply({ content: "That application expired. Please start again.", flags: MessageFlags.Ephemeral });
       return true;
+    }
+    if (submission.status === "paused_help") {
+      const config = db.getApplicationConfig(submission.application_key);
+      submission = db.updateApplicationSubmission(submission.id, {
+        status: "in_progress",
+        expires_at: Date.now() + Number(config?.time_limit_ms || DEFAULT_TIME_LIMIT_MS)
+      });
+      console.log(
+        "[Applications] Submission resumed from help",
+        JSON.stringify({ submission_id: submission.id, user_id: interaction.user.id })
+      );
     }
     await interaction.reply(buildQuestionPrompt(db.getApplicationConfig(submission.application_key), submission));
     return true;
@@ -1232,6 +1289,73 @@ async function handleButton(interaction, { client, db }) {
     }
     const config = db.getApplicationConfig(submission.application_key);
     await interaction.showModal(buildAnswerModal(config, submission));
+    return true;
+  }
+
+  if (customId.startsWith(HELP_PREFIX)) {
+    const submissionId = Number(customId.slice(HELP_PREFIX.length));
+    const submission = await expireSubmissionIfNeeded(db, db.getApplicationSubmission(submissionId));
+    if (!submission || submission.user_id !== interaction.user.id || submission.status !== "in_progress") {
+      await interaction.reply({ content: "That application is no longer active.", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+
+    const config = db.getApplicationConfig(submission.application_key);
+    const currentQuestion = config?.questions?.[submission.current_question_index] || "Unknown question";
+    const helpSummary =
+      `Application help requested for ${config?.display_name || submission.application_key}. ` +
+      `Paused on question ${submission.current_question_index + 1}/${config?.questions?.length || 0}.`;
+    const answeredSummary = submission.answers.length
+      ? submission.answers.map((entry, index) => `${index + 1}. ${entry.question}: ${shortText(entry.answer, 180)}`).join("\n")
+      : "No answers yet.";
+
+    const ticketResult = await tickets.createStructuredSupportTicket({
+      guild: interaction.guild,
+      opener: interaction.user,
+      source: "application_help",
+      category: `${config?.display_name || "Application"} Help`,
+      issueText:
+        `Application: ${config?.display_name || submission.application_key}\n` +
+        `Current question: ${currentQuestion}\n\n` +
+        `Saved answers:\n${answeredSummary}`,
+      summary: helpSummary,
+      introMessage:
+        `Hi <@${interaction.user.id}>, Tyrone created this ticket because you requested help while filling out your **${config?.display_name || "application"}**. ` +
+        `Your progress is saved for 2 hours.`,
+      awaitingIssueText: false
+    });
+
+    if (!ticketResult.ok) {
+      await interaction.reply({
+        content: ticketResult.error || "I couldn't create a help ticket right now.",
+        flags: MessageFlags.Ephemeral
+      });
+      return true;
+    }
+
+    db.updateApplicationSubmission(submission.id, {
+      status: "paused_help",
+      expires_at: Date.now() + HELP_PAUSE_MS,
+      review_notes:
+        `Paused for help at question ${submission.current_question_index + 1}. Support ticket: ${ticketResult.channelId}`
+    });
+
+    console.log(
+      "[Applications] Submission paused for help",
+      JSON.stringify({
+        submission_id: submission.id,
+        application_key: submission.application_key,
+        user_id: interaction.user.id,
+        ticket_channel_id: ticketResult.channelId
+      })
+    );
+
+    await interaction.reply({
+      content:
+        `I saved your application for **2 hours** and opened a Tyrone support ticket for you: <#${ticketResult.channelId}>.\n` +
+        `When you're ready, click **Start Application** again and use **Resume**.`,
+      flags: MessageFlags.Ephemeral
+    });
     return true;
   }
 
@@ -1569,8 +1693,11 @@ function startApplicationTicker(client, db) {
     for (const submission of expired) {
       const user = await client.users.fetch(submission.user_id).catch(() => null);
       if (user) {
+        const wasPausedForHelp = String(submission.review_notes || "").includes("Paused for help");
         await user.send(
-          "Your application expired before you finished it. You can start again from the applications panel."
+          wasPausedForHelp
+            ? "Your paused application expired after 2 hours. You can start again from the applications panel."
+            : "Your application expired before you finished it. You can start again from the applications panel."
         ).catch(() => null);
       }
     }
@@ -1587,5 +1714,6 @@ module.exports = {
   handleButton,
   handleSelectMenu,
   handleModalSubmit,
-  startApplicationTicker
+  startApplicationTicker,
+  refreshApplicationPanel
 };

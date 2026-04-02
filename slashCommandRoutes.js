@@ -70,7 +70,7 @@ const slashCommandRouteGroups = [
     moduleKey: "staffPanels",
     modulePath: "./commands/staffPanels",
     handlerName: "handleInteraction",
-    commands: ["tyrone-cleanup-setup", "checklist-setup"]
+    commands: ["tyrone-cleanup-setup", "checklist-setup", "refresh-tyrone-buttons"]
   },
   {
     moduleKey: "leaderboard",

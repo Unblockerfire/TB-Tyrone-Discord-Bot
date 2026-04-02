@@ -170,6 +170,10 @@ const slashCommands = [
     .setDescription("Post the live staff checklist panel"),
 
   new SlashCommandBuilder()
+    .setName("refresh-tyrone-buttons")
+    .setDescription("Refresh Tyrone's tracked public button panels"),
+
+  new SlashCommandBuilder()
     .setName("setup-leaderboard")
     .setDescription("Create or refresh the leaderboard post (owner only)"),
 

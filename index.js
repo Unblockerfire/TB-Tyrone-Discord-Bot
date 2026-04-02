@@ -450,6 +450,15 @@ client.once("clientReady", () => {
   }
 
   try {
+    if (staffPanels && typeof staffPanels.startButtonRefreshTicker === "function") {
+      staffPanels.startButtonRefreshTicker(client, db);
+      console.log("[Tyrone Buttons] Daily refresh started ✅");
+    }
+  } catch (err) {
+    console.error("[Tyrone Buttons] Failed to start daily refresh:", err);
+  }
+
+  try {
     if (applications && typeof applications.startApplicationTicker === "function") {
       applications.startApplicationTicker(client, db);
       console.log("[Applications] Expiry ticker started ✅");

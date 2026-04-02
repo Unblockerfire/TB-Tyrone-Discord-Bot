@@ -2043,7 +2043,7 @@ const getActiveApplicationSubmissionForUserStmt = db.prepare(`
   FROM application_submissions
   WHERE user_id = ?
     AND guild_id = ?
-    AND status = 'in_progress'
+    AND status IN ('in_progress', 'paused_help')
   ORDER BY started_at DESC, id DESC
   LIMIT 1
 `);
@@ -2118,7 +2118,7 @@ const updateApplicationSubmissionStmt = db.prepare(`
 const listDueExpiredApplicationSubmissionsStmt = db.prepare(`
   SELECT *
   FROM application_submissions
-  WHERE status = 'in_progress'
+  WHERE status IN ('in_progress', 'paused_help')
     AND expires_at IS NOT NULL
     AND expires_at <= ?
   ORDER BY expires_at ASC, id ASC
