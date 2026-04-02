@@ -50,21 +50,39 @@ function buildPrivateVcPanelPayload() {
   };
 }
 
-async function refreshPrivateVcPanel(client, db, { reason = "manual_refresh" } = {}) {
-  const targetChannelId = db?.getAppSetting?.(PRIVATE_VC_PANEL_CHANNEL_KEY)?.value || PRIVATE_VC_CREATE_CHANNEL_ID;
-  const existingMessageId = db?.getAppSetting?.(PRIVATE_VC_PANEL_MESSAGE_KEY)?.value || null;
-  if (targetChannelId && existingMessageId) {
-    const oldChannel = await client.channels.fetch(targetChannelId).catch(() => null);
-    if (oldChannel?.isTextBased?.()) {
-      const oldMessage = await oldChannel.messages.fetch(existingMessageId).catch(() => null);
-      if (oldMessage) {
-        await oldMessage.delete().catch(() => null);
-      }
-    }
+function isPrivateVcPanelMessage(message, botUserId) {
+  if (!message) return false;
+  if (botUserId && message.author?.id !== botUserId) return false;
+
+  const hasMatchingContent = String(message.content || "").includes("**Private VC Panel**");
+  const hasCreateButton = message.components?.some(row =>
+    row.components?.some(component => component.customId === "private_vc_create")
+  );
+
+  return Boolean(hasMatchingContent && hasCreateButton);
+}
+
+async function deleteExistingPrivateVcPanels(channel, botUserId) {
+  if (!channel?.isTextBased?.()) return 0;
+
+  let deleted = 0;
+  const recentMessages = await channel.messages.fetch({ limit: 25 }).catch(() => null);
+  if (!recentMessages) return 0;
+
+  for (const message of recentMessages.values()) {
+    if (!isPrivateVcPanelMessage(message, botUserId)) continue;
+    await message.delete().catch(() => null);
+    deleted += 1;
   }
 
+  return deleted;
+}
+
+async function refreshPrivateVcPanel(client, db, { reason = "manual_refresh" } = {}) {
+  const targetChannelId = db?.getAppSetting?.(PRIVATE_VC_PANEL_CHANNEL_KEY)?.value || PRIVATE_VC_CREATE_CHANNEL_ID;
   const channel = await client.channels.fetch(targetChannelId).catch(() => null);
   if (!channel?.isTextBased?.()) return false;
+  const deletedCount = await deleteExistingPrivateVcPanels(channel, client.user?.id);
 
   const posted = await channel.send(buildPrivateVcPanelPayload());
   db?.setManyAppSettings?.({
@@ -74,7 +92,7 @@ async function refreshPrivateVcPanel(client, db, { reason = "manual_refresh" } =
 
   console.log(
     "[Private VC] Panel refreshed",
-    JSON.stringify({ reason, channel_id: posted.channelId, message_id: posted.id })
+    JSON.stringify({ reason, channel_id: posted.channelId, message_id: posted.id, deleted_previous_count: deletedCount })
   );
   return true;
 }
@@ -526,24 +544,7 @@ async function handleInteraction(interaction, { db }) {
     return true;
   }
 
-  const existingChannelId = db?.getAppSetting?.(PRIVATE_VC_PANEL_CHANNEL_KEY)?.value || interaction.channelId;
-  const existingMessageId = db?.getAppSetting?.(PRIVATE_VC_PANEL_MESSAGE_KEY)?.value || null;
-  if (existingMessageId) {
-    const oldChannel = await interaction.guild.channels.fetch(existingChannelId).catch(() => null);
-    const oldMessage = oldChannel?.messages
-      ? await oldChannel.messages.fetch(existingMessageId).catch(() => null)
-      : null;
-    if (oldMessage) {
-      await oldMessage.delete().catch(() => null);
-    }
-  }
-
-  if (existingMessageId && existingChannelId === interaction.channelId) {
-    const oldMessage = await interaction.channel.messages.fetch(existingMessageId).catch(() => null);
-    if (oldMessage) {
-      await oldMessage.delete().catch(() => null);
-    }
-  }
+  await deleteExistingPrivateVcPanels(interaction.channel, interaction.client.user?.id);
 
   const posted = await interaction.channel.send(buildPrivateVcPanelPayload());
   db?.setManyAppSettings?.({

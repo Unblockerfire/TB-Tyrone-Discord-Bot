@@ -360,6 +360,34 @@ function buildApplicationPanel() {
   return { embeds: [embed], components: [row] };
 }
 
+function isApplicationPanelMessage(message, botUserId) {
+  if (!message) return false;
+  if (botUserId && message.author?.id !== botUserId) return false;
+
+  const hasMatchingEmbed = message.embeds?.some(embed => embed.title === "Staff Applications");
+  const hasMatchingButton = message.components?.some(row =>
+    row.components?.some(component => component.customId === START_BUTTON_ID)
+  );
+
+  return Boolean(hasMatchingEmbed && hasMatchingButton);
+}
+
+async function deleteExistingApplicationPanels(channel, botUserId) {
+  if (!channel?.isTextBased?.()) return 0;
+
+  let deleted = 0;
+  const recentMessages = await channel.messages.fetch({ limit: 25 }).catch(() => null);
+  if (!recentMessages) return 0;
+
+  for (const message of recentMessages.values()) {
+    if (!isApplicationPanelMessage(message, botUserId)) continue;
+    await message.delete().catch(() => null);
+    deleted += 1;
+  }
+
+  return deleted;
+}
+
 function buildTypeSelect(configs) {
   return new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
@@ -1046,18 +1074,7 @@ async function sendNextQuestion(interaction, db, submission) {
 }
 
 async function postApplicationPanel(interaction, db) {
-  const existingChannelId = db.getAppSetting(APPLICATION_PANEL_CHANNEL_ID_KEY)?.value || null;
-  const existingMessageId = db.getAppSetting(APPLICATION_PANEL_MESSAGE_ID_KEY)?.value || null;
-
-  if (existingChannelId && existingMessageId) {
-    const oldChannel = await interaction.guild.channels.fetch(existingChannelId).catch(() => null);
-    const oldMessage = oldChannel?.messages
-      ? await oldChannel.messages.fetch(existingMessageId).catch(() => null)
-      : null;
-    if (oldMessage) {
-      await oldMessage.delete().catch(() => null);
-    }
-  }
+  const deletedCount = await deleteExistingApplicationPanels(interaction.channel, interaction.client.user?.id);
 
   const sent = await interaction.channel.send(buildApplicationPanel());
   db.setManyAppSettings({
@@ -1067,26 +1084,21 @@ async function postApplicationPanel(interaction, db) {
 
   console.log(
     "[Applications] Panel setup",
-    JSON.stringify({ channel_id: interaction.channelId, message_id: sent.id, actor_user_id: interaction.user.id })
+    JSON.stringify({
+      channel_id: interaction.channelId,
+      message_id: sent.id,
+      actor_user_id: interaction.user.id,
+      deleted_previous_count: deletedCount
+    })
   );
 }
 
 async function refreshApplicationPanel(client, db, { reason = "manual_refresh" } = {}) {
   const existingChannelId = db.getAppSetting(APPLICATION_PANEL_CHANNEL_ID_KEY)?.value || null;
-  const existingMessageId = db.getAppSetting(APPLICATION_PANEL_MESSAGE_ID_KEY)?.value || null;
   const targetChannelId = existingChannelId || APPLICATION_CHANNEL_ID;
-  if (existingChannelId && existingMessageId) {
-    const oldChannel = await client.channels.fetch(existingChannelId).catch(() => null);
-    if (oldChannel?.isTextBased?.()) {
-      const oldMessage = await oldChannel.messages.fetch(existingMessageId).catch(() => null);
-      if (oldMessage) {
-        await oldMessage.delete().catch(() => null);
-      }
-    }
-  }
-
   const channel = await client.channels.fetch(targetChannelId).catch(() => null);
   if (!channel?.isTextBased?.()) return false;
+  const deletedCount = await deleteExistingApplicationPanels(channel, client.user?.id);
 
   const sent = await channel.send(buildApplicationPanel());
   db.setManyAppSettings({
@@ -1096,7 +1108,7 @@ async function refreshApplicationPanel(client, db, { reason = "manual_refresh" }
 
   console.log(
     "[Applications] Panel refreshed",
-    JSON.stringify({ reason, channel_id: channel.id, message_id: sent.id })
+    JSON.stringify({ reason, channel_id: channel.id, message_id: sent.id, deleted_previous_count: deletedCount })
   );
   return true;
 }

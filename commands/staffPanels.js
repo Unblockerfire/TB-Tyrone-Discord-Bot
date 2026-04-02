@@ -91,6 +91,34 @@ function buildCleanupPayload() {
   };
 }
 
+function isCleanupPanelMessage(message, botUserId) {
+  if (!message) return false;
+  if (botUserId && message.author?.id !== botUserId) return false;
+
+  const hasMatchingEmbed = message.embeds?.some(embed => embed.title === "Tyrone Cleanup");
+  const hasCleanupButton = message.components?.some(row =>
+    row.components?.some(component => component.customId === TYRONE_CLEANUP_BUTTON_ID)
+  );
+
+  return Boolean(hasMatchingEmbed && hasCleanupButton);
+}
+
+async function deleteExistingCleanupPanels(channel, botUserId) {
+  if (!channel?.isTextBased?.()) return 0;
+
+  let deleted = 0;
+  const recentMessages = await channel.messages.fetch({ limit: 25 }).catch(() => null);
+  if (!recentMessages) return 0;
+
+  for (const message of recentMessages.values()) {
+    if (!isCleanupPanelMessage(message, botUserId)) continue;
+    await message.delete().catch(() => null);
+    deleted += 1;
+  }
+
+  return deleted;
+}
+
 function getBoiseDateParts(date = new Date()) {
   const formatter = new Intl.DateTimeFormat("en-CA", {
     timeZone: TYRONE_BUTTON_REFRESH_TIMEZONE,
@@ -117,19 +145,9 @@ async function refreshCleanupPanel(client, db, { reason = "manual_refresh" } = {
   const targetChannelId =
     db?.getAppSetting?.(TYRONE_BUTTON_REFRESH_CHANNEL_KEY)?.value ||
     moderation.TYRONE_CLEANUP_PANEL_CHANNEL_ID;
-  const existingMessageId = db?.getAppSetting?.(TYRONE_BUTTON_REFRESH_MESSAGE_KEY)?.value || null;
-  if (targetChannelId && existingMessageId) {
-    const oldChannel = await client.channels.fetch(targetChannelId).catch(() => null);
-    if (oldChannel?.isTextBased?.()) {
-      const oldMessage = await oldChannel.messages.fetch(existingMessageId).catch(() => null);
-      if (oldMessage) {
-        await oldMessage.delete().catch(() => null);
-      }
-    }
-  }
-
   const channel = await client.channels.fetch(targetChannelId).catch(() => null);
   if (!channel?.isTextBased?.()) return false;
+  const deletedCount = await deleteExistingCleanupPanels(channel, client.user?.id);
 
   const posted = await channel.send(buildCleanupPayload());
   db?.setManyAppSettings?.({
@@ -139,7 +157,7 @@ async function refreshCleanupPanel(client, db, { reason = "manual_refresh" } = {
 
   console.log(
     "[Tyrone Buttons] Cleanup panel refreshed",
-    JSON.stringify({ reason, channel_id: posted.channelId, message_id: posted.id })
+    JSON.stringify({ reason, channel_id: posted.channelId, message_id: posted.id, deleted_previous_count: deletedCount })
   );
   return true;
 }
@@ -331,13 +349,7 @@ async function handleInteraction(interaction, { client, db }) {
       return true;
     }
 
-    const existingMessageId = db?.getAppSetting?.(TYRONE_BUTTON_REFRESH_MESSAGE_KEY)?.value || null;
-    if (existingMessageId) {
-      const oldMessage = await interaction.channel.messages.fetch(existingMessageId).catch(() => null);
-      if (oldMessage) {
-        await oldMessage.delete().catch(() => null);
-      }
-    }
+    await deleteExistingCleanupPanels(interaction.channel, interaction.client.user?.id);
 
     const posted = await interaction.channel.send(buildCleanupPayload());
     db?.setManyAppSettings?.({
