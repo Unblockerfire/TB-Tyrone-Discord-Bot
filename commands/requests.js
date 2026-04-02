@@ -460,15 +460,18 @@ module.exports = {
   refreshRequestPanel: async (client, db, { reason = "manual_refresh" } = {}) => {
     const storedChannelId = db?.getAppSetting?.(REQUEST_PANEL_CHANNEL_KEY)?.value || REQUEST_SETUP_CHANNEL_ID;
     const storedMessageId = db?.getAppSetting?.(REQUEST_PANEL_MESSAGE_KEY)?.value || null;
-    const channel = await client.channels.fetch(storedChannelId).catch(() => null);
-    if (!channel?.isTextBased?.()) return false;
-
-    if (storedMessageId) {
-      const priorMessage = await channel.messages.fetch(storedMessageId).catch(() => null);
-      if (priorMessage) {
-        await priorMessage.delete().catch(() => null);
+    if (storedChannelId && storedMessageId) {
+      const oldChannel = await client.channels.fetch(storedChannelId).catch(() => null);
+      if (oldChannel?.isTextBased?.()) {
+        const priorMessage = await oldChannel.messages.fetch(storedMessageId).catch(() => null);
+        if (priorMessage) {
+          await priorMessage.delete().catch(() => null);
+        }
       }
     }
+
+    const channel = await client.channels.fetch(storedChannelId).catch(() => null);
+    if (!channel?.isTextBased?.()) return false;
 
     const posted = await channel.send(buildPanelPayload());
     db?.setManyAppSettings?.({

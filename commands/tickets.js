@@ -297,15 +297,18 @@ async function refreshSupportPanel(client, db, { reason = "manual_refresh" } = {
   const existingMessageId = db?.getAppSetting?.(SUPPORT_PANEL_MESSAGE_KEY)?.value || null;
   if (!targetChannelId) return false;
 
-  const channel = await client.channels.fetch(targetChannelId).catch(() => null);
-  if (!channel?.isTextBased?.()) return false;
-
-  if (existingMessageId) {
-    const oldMessage = await channel.messages.fetch(existingMessageId).catch(() => null);
-    if (oldMessage) {
-      await oldMessage.delete().catch(() => null);
+  if (targetChannelId && existingMessageId) {
+    const oldChannel = await client.channels.fetch(targetChannelId).catch(() => null);
+    if (oldChannel?.isTextBased?.()) {
+      const oldMessage = await oldChannel.messages.fetch(existingMessageId).catch(() => null);
+      if (oldMessage) {
+        await oldMessage.delete().catch(() => null);
+      }
     }
   }
+
+  const channel = await client.channels.fetch(targetChannelId).catch(() => null);
+  if (!channel?.isTextBased?.()) return false;
 
   const sent = await channel.send(buildSupportPanelPayload());
   db?.setManyAppSettings?.({

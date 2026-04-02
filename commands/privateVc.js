@@ -53,15 +53,18 @@ function buildPrivateVcPanelPayload() {
 async function refreshPrivateVcPanel(client, db, { reason = "manual_refresh" } = {}) {
   const targetChannelId = db?.getAppSetting?.(PRIVATE_VC_PANEL_CHANNEL_KEY)?.value || PRIVATE_VC_CREATE_CHANNEL_ID;
   const existingMessageId = db?.getAppSetting?.(PRIVATE_VC_PANEL_MESSAGE_KEY)?.value || null;
-  const channel = await client.channels.fetch(targetChannelId).catch(() => null);
-  if (!channel?.isTextBased?.()) return false;
-
-  if (existingMessageId) {
-    const oldMessage = await channel.messages.fetch(existingMessageId).catch(() => null);
-    if (oldMessage) {
-      await oldMessage.delete().catch(() => null);
+  if (targetChannelId && existingMessageId) {
+    const oldChannel = await client.channels.fetch(targetChannelId).catch(() => null);
+    if (oldChannel?.isTextBased?.()) {
+      const oldMessage = await oldChannel.messages.fetch(existingMessageId).catch(() => null);
+      if (oldMessage) {
+        await oldMessage.delete().catch(() => null);
+      }
     }
   }
+
+  const channel = await client.channels.fetch(targetChannelId).catch(() => null);
+  if (!channel?.isTextBased?.()) return false;
 
   const posted = await channel.send(buildPrivateVcPanelPayload());
   db?.setManyAppSettings?.({

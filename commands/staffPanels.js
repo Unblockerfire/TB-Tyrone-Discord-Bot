@@ -118,15 +118,18 @@ async function refreshCleanupPanel(client, db, { reason = "manual_refresh" } = {
     db?.getAppSetting?.(TYRONE_BUTTON_REFRESH_CHANNEL_KEY)?.value ||
     moderation.TYRONE_CLEANUP_PANEL_CHANNEL_ID;
   const existingMessageId = db?.getAppSetting?.(TYRONE_BUTTON_REFRESH_MESSAGE_KEY)?.value || null;
-  const channel = await client.channels.fetch(targetChannelId).catch(() => null);
-  if (!channel?.isTextBased?.()) return false;
-
-  if (existingMessageId) {
-    const oldMessage = await channel.messages.fetch(existingMessageId).catch(() => null);
-    if (oldMessage) {
-      await oldMessage.delete().catch(() => null);
+  if (targetChannelId && existingMessageId) {
+    const oldChannel = await client.channels.fetch(targetChannelId).catch(() => null);
+    if (oldChannel?.isTextBased?.()) {
+      const oldMessage = await oldChannel.messages.fetch(existingMessageId).catch(() => null);
+      if (oldMessage) {
+        await oldMessage.delete().catch(() => null);
+      }
     }
   }
+
+  const channel = await client.channels.fetch(targetChannelId).catch(() => null);
+  if (!channel?.isTextBased?.()) return false;
 
   const posted = await channel.send(buildCleanupPayload());
   db?.setManyAppSettings?.({
