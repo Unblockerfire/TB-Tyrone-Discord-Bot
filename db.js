@@ -2059,6 +2059,15 @@ const getLatestApplicationSubmissionForUserTypeStmt = db.prepare(`
   LIMIT 1
 `);
 
+const listRecentApplicationSubmissionsByGuildStmt = db.prepare(`
+  SELECT *
+  FROM application_submissions
+  WHERE guild_id = ?
+    AND status IN ('submitted', 'accepted', 'denied', 'needs_more_info')
+  ORDER BY COALESCE(submitted_at, started_at) DESC, id DESC
+  LIMIT ?
+`);
+
 const createApplicationSubmissionStmt = db.prepare(`
   INSERT INTO application_submissions (
     application_key,
@@ -2329,6 +2338,12 @@ function getLatestApplicationSubmissionForUserType(userId, guildId, applicationK
   );
 }
 
+function listRecentApplicationSubmissionsByGuild(guildId, limit = 25) {
+  return listRecentApplicationSubmissionsByGuildStmt
+    .all(String(guildId || ""), Number(limit || 25))
+    .map(normalizeApplicationSubmissionRow);
+}
+
 function expireDueApplicationSubmissions(now = Date.now()) {
   const rows = listDueExpiredApplicationSubmissionsStmt.all(Number(now));
   const tx = db.transaction((items) => {
@@ -2438,6 +2453,7 @@ module.exports = {
   updateApplicationSubmission,
   getActiveApplicationSubmissionForUser,
   getLatestApplicationSubmissionForUserType,
+  listRecentApplicationSubmissionsByGuild,
   expireDueApplicationSubmissions,
 
   // fortnite links

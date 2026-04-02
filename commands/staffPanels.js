@@ -172,6 +172,7 @@ async function refreshTrackedTyroneButtons(client, db, { reason = "manual_refres
   const tasks = [
     () => notifyRoles.runDailyVerifyRefresh?.(client, db, { force: true }),
     () => applications.refreshApplicationPanel?.(client, db, { reason }),
+    () => applications.refreshApplicationViewerPanel?.(client, db, { reason }),
     () => requests.refreshRequestPanel?.(client, db, { reason }),
     () => tickets.refreshSupportPanel?.(client, db, { reason }),
     () => privateVc.refreshPrivateVcPanel?.(client, db, { reason }),

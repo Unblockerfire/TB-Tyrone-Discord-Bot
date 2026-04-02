@@ -94,6 +94,10 @@ const slashCommands = [
     .setDescription("Manage Tyrone application settings"),
 
   new SlashCommandBuilder()
+    .setName("show-applications")
+    .setDescription("Post the staff application viewer panel"),
+
+  new SlashCommandBuilder()
     .setName("setup-live")
     .setDescription("Post the Live Notifications role button panel (owner/admin)"),
 

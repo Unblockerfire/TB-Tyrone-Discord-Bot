@@ -13,13 +13,18 @@ const {
   TextInputStyle
 } = require("discord.js");
 const tickets = require("./tickets");
+const fetch = (...args) =>
+  import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
 const APPLICATION_CHANNEL_ID = "1113094456242081832";
+const APPLICATION_VIEWER_CHANNEL_ID = "1115806144384995399";
 const VERIFIED_ROLE_ID = "1113560011193450536";
 const OWNER_ROLE_ID = "1113158001604427966";
 const TIMEOUT_TRACK_ROLE_ID = "1113813941852831845";
 const APPLICATION_PANEL_MESSAGE_ID_KEY = "applications.panel.message_id";
 const APPLICATION_PANEL_CHANNEL_ID_KEY = "applications.panel.channel_id";
+const APPLICATION_VIEWER_PANEL_MESSAGE_ID_KEY = "applications.viewer_panel.message_id";
+const APPLICATION_VIEWER_PANEL_CHANNEL_ID_KEY = "applications.viewer_panel.channel_id";
 const DEFAULT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_TIME_LIMIT_MS = 60 * 60 * 1000;
 const APPLICATION_TICK_MS = 60 * 1000;
@@ -43,8 +48,13 @@ const ADMIN_EDIT_MESSAGES_PREFIX = "edit_messages:";
 const ADMIN_EDIT_ROLES_A_PREFIX = "edit_roles_a:";
 const ADMIN_EDIT_ROLES_B_PREFIX = "edit_roles_b:";
 const ADMIN_EDIT_TIMING_PREFIX = "edit_timing:";
+const VIEWER_OPEN_BUTTON_ID = "application:viewer:open";
+const VIEWER_REFRESH_BUTTON_ID = "application:viewer:refresh";
+const VIEWER_BACK_BUTTON_ID = "application:viewer:back";
+const VIEWER_SELECT_ID = "application:viewer:select";
 const HELP_PAUSE_MS = 2 * 60 * 60 * 1000;
 let applicationTickerStarted = false;
+const applicationAssessmentCache = new Map();
 
 function getDefaultManagerRoles() {
   return [OWNER_ROLE_ID, process.env.ADMIN_ROLE_ID || ""].filter(Boolean);
@@ -341,6 +351,189 @@ function canReviewApplications(member, config) {
   );
 }
 
+function canUseApplicationViewer(member, db) {
+  if (!member) return false;
+  if (member.permissions?.has?.(PermissionsBitField.Flags.Administrator)) return true;
+  if (member.permissions?.has?.(PermissionsBitField.Flags.ManageGuild)) return true;
+  const configs = ensureApplicationDefaults(db);
+  return configs.some(config => canReviewApplications(member, config));
+}
+
+function formatRelativeTime(timestamp) {
+  const value = Number(timestamp || 0);
+  if (!value) return "unknown";
+  const diffMs = Date.now() - value;
+  const diffMinutes = Math.max(0, Math.floor(diffMs / 60000));
+  if (diffMinutes < 1) return "just now";
+  if (diffMinutes < 60) return `${diffMinutes}m ago`;
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+  const diffDays = Math.floor(diffHours / 24);
+  return `${diffDays}d ago`;
+}
+
+function getSubmissionTimestamp(submission) {
+  return submission.submitted_at || submission.started_at || submission.updated_at || Date.now();
+}
+
+function trimForOption(text, max = 100) {
+  const value = String(text || "").trim();
+  if (value.length <= max) return value || "Unknown";
+  return `${value.slice(0, max - 3)}...`;
+}
+
+function scoreColor(score) {
+  if (score >= 80) return 0x2ecc71;
+  if (score >= 60) return 0xf1c40f;
+  return 0xe74c3c;
+}
+
+function normalizeAssessmentList(list, fallback) {
+  if (!Array.isArray(list)) return fallback;
+  const normalized = list.map(item => shortText(item, 180)).filter(Boolean).slice(0, 5);
+  return normalized.length ? normalized : fallback;
+}
+
+function extractJsonObject(text) {
+  const source = String(text || "").trim();
+  if (!source) return null;
+  try {
+    return JSON.parse(source);
+  } catch {}
+
+  const start = source.indexOf("{");
+  const end = source.lastIndexOf("}");
+  if (start === -1 || end === -1 || end <= start) return null;
+  try {
+    return JSON.parse(source.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+}
+
+function buildHeuristicAssessment(config, submission) {
+  const answers = Array.isArray(submission.answers) ? submission.answers : [];
+  const answerLengths = answers.map(entry => String(entry.answer || "").trim().length);
+  const answeredCount = answerLengths.filter(length => length > 0).length;
+  const averageLength = answeredCount
+    ? Math.round(answerLengths.reduce((sum, length) => sum + length, 0) / answeredCount)
+    : 0;
+
+  let score = 35;
+  score += Math.min(35, answeredCount * 6);
+  score += Math.min(20, Math.floor(averageLength / 40));
+  score += config?.questions?.length && answeredCount >= config.questions.length ? 10 : 0;
+  score = Math.max(20, Math.min(95, score));
+
+  const strong = [];
+  const rough = [];
+  const concerns = [];
+
+  if (answeredCount >= Math.max(3, Math.floor((config?.questions?.length || 1) * 0.75))) {
+    strong.push("Most of the application questions were answered.");
+  } else {
+    concerns.push("Several questions appear incomplete or missing.");
+  }
+
+  if (averageLength >= 140) {
+    strong.push("The answers are detailed enough to review meaningfully.");
+  } else if (averageLength >= 70) {
+    rough.push("Some answers have detail, but others may need follow-up.");
+  } else {
+    concerns.push("Many answers are very short and may not show enough depth.");
+  }
+
+  if (!strong.length) strong.push("The application has enough content for a first-pass review.");
+  if (!rough.length) rough.push("A staff reviewer should still verify references, availability, and fit.");
+  if (!concerns.length) concerns.push("No major automatic concerns were detected from answer length alone.");
+
+  return {
+    score,
+    summary:
+      "This is a heuristic application review because AI analysis was unavailable. Use it as a quick triage signal, not the final decision.",
+    strong,
+    rough,
+    concerns,
+    source: "heuristic"
+  };
+}
+
+async function getApplicationAssessment(config, submission) {
+  const cacheKey = `${submission.id}:${submission.updated_at}`;
+  if (applicationAssessmentCache.has(cacheKey)) {
+    return applicationAssessmentCache.get(cacheKey);
+  }
+
+  const apiKey = process.env.OPENAI_API_KEY || null;
+  if (!apiKey) {
+    const fallback = buildHeuristicAssessment(config, submission);
+    applicationAssessmentCache.set(cacheKey, fallback);
+    return fallback;
+  }
+
+  try {
+    const answerBlock = (submission.answers || [])
+      .map((entry, index) => `${index + 1}. ${entry.question}\nAnswer: ${entry.answer}`)
+      .join("\n\n");
+
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: "gpt-4.1-mini",
+        temperature: 0.2,
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are reviewing staff applications for a Discord server. Return strict JSON with keys: score, summary, strong, rough, concerns. " +
+              "Score must be an integer 0-100. strong/rough/concerns must be arrays of short strings. Be concise and fair."
+          },
+          {
+            role: "user",
+            content:
+              `Application type: ${config.display_name}\n` +
+              `Status: ${submission.status}\n` +
+              `Submitted answers:\n${answerBlock}\n\n` +
+              "Review this application and score how strong it looks for staff consideration."
+          }
+        ]
+      })
+    });
+
+    if (!res.ok) {
+      throw new Error(`OpenAI request failed with ${res.status}`);
+    }
+
+    const data = await res.json();
+    const content = data?.choices?.[0]?.message?.content || "";
+    const parsed = extractJsonObject(content);
+    if (!parsed) {
+      throw new Error("AI response did not contain valid JSON.");
+    }
+
+    const assessment = {
+      score: Math.max(0, Math.min(100, Number(parsed.score || 0) || 0)),
+      summary: shortText(parsed.summary || "No summary returned.", 500),
+      strong: normalizeAssessmentList(parsed.strong, ["No clear strengths were identified."]),
+      rough: normalizeAssessmentList(parsed.rough, ["No rough spots were identified."]),
+      concerns: normalizeAssessmentList(parsed.concerns, ["No serious concerns were identified."]),
+      source: "openai"
+    };
+
+    applicationAssessmentCache.set(cacheKey, assessment);
+    return assessment;
+  } catch (error) {
+    console.error("[Applications] Assessment failed:", error);
+    const fallback = buildHeuristicAssessment(config, submission);
+    applicationAssessmentCache.set(cacheKey, fallback);
+    return fallback;
+  }
+}
+
 function buildApplicationPanel() {
   const embed = new EmbedBuilder()
     .setTitle("Staff Applications")
@@ -358,6 +551,53 @@ function buildApplicationPanel() {
   );
 
   return { embeds: [embed], components: [row] };
+}
+
+function buildApplicationViewerPanel() {
+  const embed = new EmbedBuilder()
+    .setTitle("Application Viewer")
+    .setColor(0x1f6f63)
+    .setDescription(
+      "Use the button below to open the current application viewer.\n\n" +
+      "It shows recent applicants, when they applied, which position they applied for, and a scored summary."
+    );
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(VIEWER_OPEN_BUTTON_ID)
+      .setLabel("Show Applications")
+      .setStyle(ButtonStyle.Primary)
+  );
+
+  return { embeds: [embed], components: [row] };
+}
+
+function isApplicationViewerPanelMessage(message, botUserId) {
+  if (!message) return false;
+  if (botUserId && message.author?.id !== botUserId) return false;
+
+  const hasMatchingEmbed = message.embeds?.some(embed => embed.title === "Application Viewer");
+  const hasMatchingButton = message.components?.some(row =>
+    row.components?.some(component => component.customId === VIEWER_OPEN_BUTTON_ID)
+  );
+
+  return Boolean(hasMatchingEmbed && hasMatchingButton);
+}
+
+async function deleteExistingApplicationViewerPanels(channel, botUserId) {
+  if (!channel?.isTextBased?.()) return 0;
+
+  let deleted = 0;
+  const recentMessages = await channel.messages.fetch({ limit: 25 }).catch(() => null);
+  if (!recentMessages) return 0;
+
+  for (const message of recentMessages.values()) {
+    if (!isApplicationViewerPanelMessage(message, botUserId)) continue;
+    await message.delete().catch(() => null);
+    deleted += 1;
+  }
+
+  return deleted;
 }
 
 function isApplicationPanelMessage(message, botUserId) {
@@ -520,6 +760,154 @@ function buildReviewUpdatedEmbed(originalEmbed, statusText, reviewerId, note = n
   embed.setFields(updatedFields);
   embed.setFooter({ text: reviewLine });
   return embed;
+}
+
+async function getViewerSubmissions(interaction, db) {
+  const configs = getConfigMap(db);
+  const submissions = db
+    .listRecentApplicationSubmissionsByGuild(interaction.guildId, 25)
+    .filter(submission => canReviewApplications(interaction.member, configs[submission.application_key]));
+
+  const enriched = [];
+  for (const submission of submissions) {
+    const config = configs[submission.application_key];
+    if (!config) continue;
+    const member = await interaction.guild.members.fetch(submission.user_id).catch(() => null);
+    const user = member?.user || (await interaction.client.users.fetch(submission.user_id).catch(() => null));
+    enriched.push({
+      submission,
+      config,
+      user,
+      displayName: member?.displayName || user?.username || submission.user_id
+    });
+  }
+
+  return enriched;
+}
+
+function buildViewerListPayload(items) {
+  const embed = new EmbedBuilder()
+    .setTitle("Recent Applications")
+    .setColor(0x5865f2)
+    .setDescription(
+      items.length
+        ? items
+            .slice(0, 10)
+            .map((item, index) => {
+              const submittedAt = Math.floor(getSubmissionTimestamp(item.submission) / 1000);
+              return `${index + 1}. **${item.config.display_name}** by <@${item.submission.user_id}> • <t:${submittedAt}:R> • ${item.submission.status}`;
+            })
+            .join("\n")
+        : "No application submissions were found yet."
+    );
+
+  const rows = [];
+  if (items.length) {
+    rows.push(
+      new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(VIEWER_SELECT_ID)
+          .setPlaceholder("Choose an application to inspect")
+          .addOptions(
+            items.slice(0, 25).map(item => ({
+              label: trimForOption(`${item.config.display_name} • ${item.displayName}`),
+              value: String(item.submission.id),
+              description: trimForOption(
+                `${item.submission.status} • ${formatRelativeTime(getSubmissionTimestamp(item.submission))}`,
+                100
+              )
+            }))
+          )
+      )
+    );
+  }
+
+  rows.push(
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(VIEWER_REFRESH_BUTTON_ID)
+        .setLabel("Refresh")
+        .setStyle(ButtonStyle.Secondary)
+    )
+  );
+
+  return {
+    embeds: [embed],
+    components: rows,
+    flags: MessageFlags.Ephemeral
+  };
+}
+
+function buildAssessmentEmbed(config, submission, assessment) {
+  const submittedAt = Math.floor(getSubmissionTimestamp(submission) / 1000);
+  return new EmbedBuilder()
+    .setTitle(`${config.display_name} Review`)
+    .setColor(scoreColor(assessment.score))
+    .setDescription(shortText(assessment.summary, 1500))
+    .addFields(
+      { name: "Applicant", value: `<@${submission.user_id}>`, inline: true },
+      { name: "Score", value: `${assessment.score}/100`, inline: true },
+      { name: "Status", value: submission.status, inline: true },
+      { name: "Submitted", value: `<t:${submittedAt}:F>\n<t:${submittedAt}:R>`, inline: false },
+      { name: "🟢 Good", value: assessment.strong.map(item => `• ${item}`).join("\n"), inline: false },
+      { name: "🟡 Rough", value: assessment.rough.map(item => `• ${item}`).join("\n"), inline: false },
+      { name: "🔴 Concerns", value: assessment.concerns.map(item => `• ${item}`).join("\n"), inline: false }
+    )
+    .setFooter({
+      text: assessment.source === "openai" ? "AI-assisted summary" : "Heuristic summary"
+    });
+}
+
+function buildSubmissionAnswersEmbed(config, submission, displayName) {
+  const embed = new EmbedBuilder()
+    .setTitle(`${displayName} • ${config.display_name}`)
+    .setColor(0x34495e)
+    .setDescription(`Application ID: \`${submission.id}\``)
+    .setTimestamp(new Date(getSubmissionTimestamp(submission)));
+
+  for (let index = 0; index < submission.answers.length; index += 1) {
+    const entry = submission.answers[index];
+    embed.addFields({
+      name: `${index + 1}. ${shortText(entry.question, 256)}`,
+      value: shortText(entry.answer, 1024),
+      inline: false
+    });
+  }
+
+  return embed;
+}
+
+function buildViewerDetailComponents(items, selectedId) {
+  const rows = [
+    new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(VIEWER_SELECT_ID)
+        .setPlaceholder("Jump to another application")
+        .addOptions(
+          items.slice(0, 25).map(item => ({
+            label: trimForOption(`${item.config.display_name} • ${item.displayName}`),
+            value: String(item.submission.id),
+            description: trimForOption(
+              `${item.submission.status} • ${formatRelativeTime(getSubmissionTimestamp(item.submission))}`,
+              100
+            ),
+            default: String(item.submission.id) === String(selectedId)
+          }))
+        )
+    ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(VIEWER_BACK_BUTTON_ID)
+        .setLabel("Back")
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(VIEWER_REFRESH_BUTTON_ID)
+        .setLabel("Refresh")
+        .setStyle(ButtonStyle.Primary)
+    )
+  ];
+
+  return rows;
 }
 
 function buildAdminTypeSelect(configs, selectedKey) {
@@ -1113,6 +1501,88 @@ async function refreshApplicationPanel(client, db, { reason = "manual_refresh" }
   return true;
 }
 
+async function refreshApplicationViewerPanel(client, db, { reason = "manual_refresh" } = {}) {
+  const existingChannelId = db.getAppSetting(APPLICATION_VIEWER_PANEL_CHANNEL_ID_KEY)?.value || null;
+  const targetChannelId = existingChannelId || APPLICATION_VIEWER_CHANNEL_ID;
+  const channel = await client.channels.fetch(targetChannelId).catch(() => null);
+  if (!channel?.isTextBased?.()) return false;
+
+  const deletedCount = await deleteExistingApplicationViewerPanels(channel, client.user?.id);
+  const sent = await channel.send(buildApplicationViewerPanel());
+  db.setManyAppSettings({
+    [APPLICATION_VIEWER_PANEL_CHANNEL_ID_KEY]: channel.id,
+    [APPLICATION_VIEWER_PANEL_MESSAGE_ID_KEY]: sent.id
+  });
+
+  console.log(
+    "[Applications] Viewer panel refreshed",
+    JSON.stringify({ reason, channel_id: channel.id, message_id: sent.id, deleted_previous_count: deletedCount })
+  );
+  return true;
+}
+
+async function renderApplicationViewerList(interaction, db) {
+  if (!canUseApplicationViewer(interaction.member, db)) {
+    const payload = {
+      content: "You do not have permission to view applications.",
+      flags: MessageFlags.Ephemeral
+    };
+    if (interaction.deferred || interaction.replied) {
+      await interaction.editReply(payload);
+    } else {
+      await interaction.reply(payload);
+    }
+    return true;
+  }
+
+  const items = await getViewerSubmissions(interaction, db);
+  const payload = buildViewerListPayload(items);
+
+  if (interaction.deferred || interaction.replied) {
+    await interaction.editReply({
+      content: "",
+      embeds: payload.embeds,
+      components: payload.components
+    });
+  } else {
+    await interaction.reply(payload);
+  }
+  return true;
+}
+
+async function renderApplicationViewerDetail(interaction, db, submissionId) {
+  if (!canUseApplicationViewer(interaction.member, db)) {
+    await interaction.editReply({
+      content: "You do not have permission to view applications.",
+      embeds: [],
+      components: []
+    });
+    return true;
+  }
+
+  const items = await getViewerSubmissions(interaction, db);
+  const item = items.find(entry => String(entry.submission.id) === String(submissionId));
+  if (!item) {
+    await interaction.editReply({
+      content: "That application could not be found in the current viewer list.",
+      embeds: [],
+      components: []
+    });
+    return true;
+  }
+
+  const assessment = await getApplicationAssessment(item.config, item.submission);
+  await interaction.editReply({
+    content: "",
+    embeds: [
+      buildAssessmentEmbed(item.config, item.submission, assessment),
+      buildSubmissionAnswersEmbed(item.config, item.submission, item.displayName)
+    ],
+    components: buildViewerDetailComponents(items, submissionId)
+  });
+  return true;
+}
+
 async function handleInteraction(interaction, { db }) {
   if (!interaction.isChatInputCommand()) return false;
 
@@ -1142,6 +1612,48 @@ async function handleInteraction(interaction, { db }) {
     return true;
   }
 
+  if (interaction.commandName === "show-applications") {
+    if (!interaction.inGuild() || interaction.channelId !== APPLICATION_VIEWER_CHANNEL_ID) {
+      await interaction.reply({
+        content: `Run this in <#${APPLICATION_VIEWER_CHANNEL_ID}>.`,
+        flags: MessageFlags.Ephemeral
+      });
+      return true;
+    }
+
+    if (!isHeadAdmin(interaction.member)) {
+      await interaction.reply({
+        content: "Only Head Admin can run this command.",
+        flags: MessageFlags.Ephemeral
+      });
+      return true;
+    }
+
+    ensureApplicationDefaults(db);
+    const deletedCount = await deleteExistingApplicationViewerPanels(interaction.channel, interaction.client.user?.id);
+    const sent = await interaction.channel.send(buildApplicationViewerPanel());
+    db.setManyAppSettings({
+      [APPLICATION_VIEWER_PANEL_CHANNEL_ID_KEY]: interaction.channelId,
+      [APPLICATION_VIEWER_PANEL_MESSAGE_ID_KEY]: sent.id
+    });
+
+    console.log(
+      "[Applications] Viewer panel setup",
+      JSON.stringify({
+        channel_id: interaction.channelId,
+        message_id: sent.id,
+        actor_user_id: interaction.user.id,
+        deleted_previous_count: deletedCount
+      })
+    );
+
+    await interaction.reply({
+      content: "Application viewer panel posted.",
+      flags: MessageFlags.Ephemeral
+    });
+    return true;
+  }
+
   if (interaction.commandName === "application-info") {
     if (!interaction.inGuild()) {
       await interaction.reply({ content: "This command only works in a server.", flags: MessageFlags.Ephemeral });
@@ -1163,6 +1675,24 @@ async function handleInteraction(interaction, { db }) {
 
 async function handleButton(interaction, { client, db }) {
   const customId = String(interaction.customId || "");
+
+  if (customId === VIEWER_OPEN_BUTTON_ID) {
+    ensureApplicationDefaults(db);
+    await renderApplicationViewerList(interaction, db);
+    return true;
+  }
+
+  if (customId === VIEWER_REFRESH_BUTTON_ID) {
+    await interaction.deferUpdate();
+    await renderApplicationViewerList(interaction, db);
+    return true;
+  }
+
+  if (customId === VIEWER_BACK_BUTTON_ID) {
+    await interaction.deferUpdate();
+    await renderApplicationViewerList(interaction, db);
+    return true;
+  }
 
   if (customId === START_BUTTON_ID) {
     ensureApplicationDefaults(db);
@@ -1494,6 +2024,12 @@ async function handleButton(interaction, { client, db }) {
 async function handleSelectMenu(interaction, { db }) {
   const customId = String(interaction.customId || "");
 
+  if (customId === VIEWER_SELECT_ID) {
+    await interaction.deferUpdate();
+    await renderApplicationViewerDetail(interaction, db, interaction.values?.[0]);
+    return true;
+  }
+
   if (customId === TYPE_SELECT_ID) {
     const key = interaction.values?.[0];
     const config = db.getApplicationConfig(key);
@@ -1730,5 +2266,6 @@ module.exports = {
   handleSelectMenu,
   handleModalSubmit,
   startApplicationTicker,
-  refreshApplicationPanel
+  refreshApplicationPanel,
+  refreshApplicationViewerPanel
 };
