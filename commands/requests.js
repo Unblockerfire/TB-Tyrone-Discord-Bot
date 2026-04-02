@@ -120,6 +120,34 @@ function buildPanelPayload() {
   };
 }
 
+function isRequestPanelMessage(message, botUserId) {
+  if (!message) return false;
+  if (botUserId && message.author?.id !== botUserId) return false;
+
+  const hasMatchingEmbed = message.embeds?.some(embed => embed.title === "Tyrone Requests");
+  const hasMatchingSelect = message.components?.some(row =>
+    row.components?.some(component => component.customId === REQUEST_SELECT_ID)
+  );
+
+  return Boolean(hasMatchingEmbed && hasMatchingSelect);
+}
+
+async function deleteExistingRequestPanels(channel, botUserId) {
+  if (!channel?.isTextBased?.()) return 0;
+
+  let deleted = 0;
+  const recentMessages = await channel.messages.fetch({ limit: 25 }).catch(() => null);
+  if (!recentMessages) return 0;
+
+  for (const message of recentMessages.values()) {
+    if (!isRequestPanelMessage(message, botUserId)) continue;
+    await message.delete().catch(() => null);
+    deleted += 1;
+  }
+
+  return deleted;
+}
+
 function getOptionConfig(value) {
   return REQUEST_OPTIONS.find(option => option.value === value) || null;
 }
@@ -268,17 +296,7 @@ async function handleInteraction(interaction, { db } = {}) {
     return true;
   }
 
-  const existingChannelId = db?.getAppSetting?.(REQUEST_PANEL_CHANNEL_KEY)?.value || null;
-  const existingMessageId = db?.getAppSetting?.(REQUEST_PANEL_MESSAGE_KEY)?.value || null;
-  if (existingChannelId && existingMessageId) {
-    const priorChannel = await interaction.guild.channels.fetch(existingChannelId).catch(() => null);
-    const priorMessage = priorChannel?.messages
-      ? await priorChannel.messages.fetch(existingMessageId).catch(() => null)
-      : null;
-    if (priorMessage) {
-      await priorMessage.delete().catch(() => null);
-    }
-  }
+  const deletedCount = await deleteExistingRequestPanels(interaction.channel, interaction.client.user?.id);
 
   const posted = await interaction.channel.send(buildPanelPayload());
   db?.setManyAppSettings?.({
@@ -291,7 +309,8 @@ async function handleInteraction(interaction, { db } = {}) {
     JSON.stringify({
       guild_id: interaction.guildId,
       channel_id: interaction.channelId,
-      user_id: interaction.user.id
+      user_id: interaction.user.id,
+      deleted_previous_count: deletedCount
     })
   );
 
@@ -459,19 +478,9 @@ module.exports = {
   handleModalSubmit,
   refreshRequestPanel: async (client, db, { reason = "manual_refresh" } = {}) => {
     const storedChannelId = db?.getAppSetting?.(REQUEST_PANEL_CHANNEL_KEY)?.value || REQUEST_SETUP_CHANNEL_ID;
-    const storedMessageId = db?.getAppSetting?.(REQUEST_PANEL_MESSAGE_KEY)?.value || null;
-    if (storedChannelId && storedMessageId) {
-      const oldChannel = await client.channels.fetch(storedChannelId).catch(() => null);
-      if (oldChannel?.isTextBased?.()) {
-        const priorMessage = await oldChannel.messages.fetch(storedMessageId).catch(() => null);
-        if (priorMessage) {
-          await priorMessage.delete().catch(() => null);
-        }
-      }
-    }
-
     const channel = await client.channels.fetch(storedChannelId).catch(() => null);
     if (!channel?.isTextBased?.()) return false;
+    const deletedCount = await deleteExistingRequestPanels(channel, client.user?.id);
 
     const posted = await channel.send(buildPanelPayload());
     db?.setManyAppSettings?.({
@@ -481,7 +490,12 @@ module.exports = {
 
     console.log(
       "[Requests] Panel refreshed",
-      JSON.stringify({ reason, channel_id: posted.channelId, message_id: posted.id })
+      JSON.stringify({
+        reason,
+        channel_id: posted.channelId,
+        message_id: posted.id,
+        deleted_previous_count: deletedCount
+      })
     );
     return true;
   }
