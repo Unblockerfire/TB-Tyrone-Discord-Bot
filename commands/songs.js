@@ -10,8 +10,6 @@ const {
   TextInputStyle
 } = require("discord.js");
 
-const { searchTrack, addTrackToPlaylist } = require("./spotify");
-
 const ADMIN_REVIEW_CHANNEL_ID = "1477155955505500261";
 const RQSONG_PANEL_CHANNEL_KEY = "songs.panel.channel_id";
 const RQSONG_PANEL_MESSAGE_KEY = "songs.panel.message_id";
@@ -22,9 +20,6 @@ const RQSONG_SONG_INPUT_ID = "rqsong_song_input";
 const RQSONG_ARTIST_INPUT_ID = "rqsong_artist_input";
 const RQSONG_CONFIRM_ID = "songconfirm_yes";
 const RQSONG_EDIT_ID = "songconfirm_edit";
-
-console.log("[Songs] typeof searchTrack:", typeof searchTrack);
-console.log("[Songs] typeof addTrackToPlaylist:", typeof addTrackToPlaylist);
 
 const pendingSongRequests = new Map();
 
@@ -47,7 +42,7 @@ function buildPanelPayload() {
         .setColor(0x1db954)
         .setDescription(
           "Click the button below to request a song.\n" +
-          "Tyrone will search it first so you can confirm the right track before it gets submitted."
+          "Tyrone will collect the song name and artist, then let you confirm it before it gets submitted."
         )
     ],
     components: [
@@ -119,12 +114,10 @@ function buildUserConfirmEmbed(pending) {
   return new EmbedBuilder()
     .setTitle("Confirm Song Request")
     .setColor(0x1db954)
-    .setDescription("Is this the correct song?")
+    .setDescription("Is this the correct song request?")
     .addFields(
-      { name: "Song Name", value: pending.trackName || "Unknown", inline: false },
-      { name: "Artist", value: pending.trackArtists || "Unknown", inline: false },
-      { name: "Your Search", value: `${pending.songInput} - ${pending.artistInput}`, inline: false },
-      { name: "Spotify", value: pending.trackUrl || "No Spotify URL available", inline: false }
+      { name: "Song Name", value: pending.songInput || "Unknown", inline: false },
+      { name: "Artist", value: pending.artistInput || "Unknown", inline: false }
     )
     .setTimestamp(new Date());
 }
@@ -134,8 +127,8 @@ function buildAdminEmbed(userId, pending) {
     .setTitle("Song Request")
     .setColor(0x1db954)
     .addFields(
-      { name: "Song Name", value: pending.trackName || "Unknown", inline: false },
-      { name: "Artist", value: pending.trackArtists || "Unknown", inline: false },
+      { name: "Song Name", value: pending.songInput || "Unknown", inline: false },
+      { name: "Artist", value: pending.artistInput || "Unknown", inline: false },
       {
         name: "Requested by",
         value: `<@${userId}> (${userId})`,
@@ -147,13 +140,8 @@ function buildAdminEmbed(userId, pending) {
         inline: true
       },
       {
-        name: "User Search",
-        value: `${pending.songInput} - ${pending.artistInput}`,
-        inline: false
-      },
-      {
-        name: "Spotify",
-        value: pending.trackUrl || "No Spotify URL available",
+        name: "Submitted From",
+        value: "Tyrone song request panel",
         inline: false
       }
     )
@@ -305,7 +293,6 @@ async function handleButton(interaction) {
     .map(s => s.trim())
     .filter(Boolean);
 
-  const playlistId = process.env.SPOTIFY_PLAYLIST_ID;
   const member = interaction.member;
 
   if (!userHasAnyRole(member, approverRoleIds)) {
@@ -377,31 +364,6 @@ async function handleButton(interaction) {
     return true;
   }
 
-  let resultText = "";
-  const searchQuery =
-    artist && artist !== "Unknown" ? `${songName} - ${artist}` : songName;
-
-  try {
-    if (!playlistId) {
-      resultText = "Spotify playlist is not configured on the bot.";
-    } else {
-      const track = await searchTrack(searchQuery);
-
-      if (!track) {
-        resultText = "Could not find that song on Spotify.";
-      } else {
-        await addTrackToPlaylist(playlistId, track.uri);
-        const artists = track.artists.join(", ");
-        resultText =
-          `Added **${track.name}** by **${artists}** to the stream playlist.\n` +
-          (track.url ? track.url : "");
-      }
-    }
-  } catch (error) {
-    console.error("Spotify add track error:", error);
-    resultText = "Failed to add song to Spotify playlist. Check logs and credentials.";
-  }
-
   embed.setFields(
     fields.map(field => {
       if (field.name === "Status") {
@@ -422,7 +384,7 @@ async function handleButton(interaction) {
   });
 
   await interaction.followUp({
-    content: resultText,
+    content: `Approved **${songName}** by **${artist || "Unknown"}**.`,
     flags: MessageFlags.Ephemeral
   });
 
@@ -435,43 +397,22 @@ async function handleModalSubmit(interaction) {
 
   const songInput = interaction.fields.getTextInputValue(RQSONG_SONG_INPUT_ID).trim();
   const artistInput = interaction.fields.getTextInputValue(RQSONG_ARTIST_INPUT_ID).trim();
-  const searchQuery = `${songInput} - ${artistInput}`;
 
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-  try {
-    const track = await searchTrack(searchQuery);
-    if (!track) {
-      await interaction.editReply(
-        "I couldn’t find a matching song on Spotify. Try a slightly different song or artist name."
-      );
-      return true;
-    }
+  const pending = {
+    songInput,
+    artistInput
+  };
 
-    const pending = {
-      songInput,
-      artistInput,
-      trackName: track.name || songInput,
-      trackArtists: Array.isArray(track.artists) && track.artists.length
-        ? track.artists.join(", ")
-        : artistInput,
-      trackUri: track.uri || null,
-      trackUrl: track.url || null
-    };
+  pendingSongRequests.set(interaction.user.id, pending);
 
-    pendingSongRequests.set(interaction.user.id, pending);
+  await interaction.editReply({
+    embeds: [buildUserConfirmEmbed(pending)],
+    components: [buildConfirmButtons()]
+  });
 
-    await interaction.editReply({
-      embeds: [buildUserConfirmEmbed(pending)],
-      components: [buildConfirmButtons()]
-    });
-
-    return true;
-  } catch (error) {
-    console.error("[Songs] Spotify search error:", error);
-    await interaction.editReply("I hit an error while searching Spotify. Try again in a moment.");
-    return true;
-  }
+  return true;
 }
 
 async function refreshSongPanel(client, db, { reason = "manual_refresh" } = {}) {
