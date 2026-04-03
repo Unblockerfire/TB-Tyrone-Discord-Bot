@@ -18,6 +18,11 @@ const fetch = (...args) =>
 
 const APPLICATION_CHANNEL_ID = "1113094456242081832";
 const APPLICATION_VIEWER_CHANNEL_ID = "1115806144384995399";
+const APPLICATION_REVIEW_CHANNEL_ID = "1115806144384995399";
+const LEGACY_APPLICATION_REVIEW_CHANNEL_IDS = uniq([
+  process.env.REQUEST_CHANNEL_ID || "",
+  "1477110370605727835"
+]);
 const VERIFIED_ROLE_ID = "1113560011193450536";
 const OWNER_ROLE_ID = "1113158001604427966";
 const TIMEOUT_TRACK_ROLE_ID = "1113813941852831845";
@@ -65,7 +70,7 @@ function getDefaultPingRoles() {
 }
 
 function getDefaultReviewChannelId() {
-  return process.env.REQUEST_CHANNEL_ID || APPLICATION_CHANNEL_ID;
+  return APPLICATION_REVIEW_CHANNEL_ID;
 }
 
 function getBlacklistRoleId() {
@@ -317,8 +322,20 @@ function getApplicationDefaults() {
 function ensureApplicationDefaults(db) {
   const defaults = getApplicationDefaults();
   for (const config of defaults) {
-    if (!db.getApplicationConfig(config.key)) {
+    const existing = db.getApplicationConfig(config.key);
+    if (!existing) {
       db.upsertApplicationConfig(config);
+      continue;
+    }
+
+    if (
+      !existing.review_channel_id ||
+      LEGACY_APPLICATION_REVIEW_CHANNEL_IDS.includes(existing.review_channel_id)
+    ) {
+      db.upsertApplicationConfig({
+        ...existing,
+        review_channel_id: APPLICATION_REVIEW_CHANNEL_ID
+      });
     }
   }
   return db.listApplicationConfigs();
@@ -742,6 +759,25 @@ function buildApplicationEmbed(config, submission, user) {
   }
 
   return embed;
+}
+
+function buildReviewAssessmentEmbed(config, submission, assessment) {
+  const submittedAt = Math.floor((submission.submitted_at || Date.now()) / 1000);
+  return new EmbedBuilder()
+    .setTitle(`${config.display_name} AI Review`)
+    .setColor(scoreColor(assessment.score))
+    .setDescription(shortText(assessment.summary, 1500))
+    .addFields(
+      { name: "Applicant", value: `<@${submission.user_id}>`, inline: true },
+      { name: "Score", value: `${assessment.score}/100`, inline: true },
+      { name: "Submitted", value: `<t:${submittedAt}:R>`, inline: true },
+      { name: "🟢 Good", value: assessment.strong.map(item => `• ${item}`).join("\n"), inline: false },
+      { name: "🟡 Rough", value: assessment.rough.map(item => `• ${item}`).join("\n"), inline: false },
+      { name: "🔴 Concerns", value: assessment.concerns.map(item => `• ${item}`).join("\n"), inline: false }
+    )
+    .setFooter({
+      text: assessment.source === "openai" ? "AI-assisted staff summary" : "Heuristic staff summary"
+    });
 }
 
 function buildReviewUpdatedEmbed(originalEmbed, statusText, reviewerId, note = null) {
@@ -1253,10 +1289,13 @@ function getEligibilityFailure(member, config, latestSubmission) {
 }
 
 async function createReviewArtifacts({ client, db, guild, user, config, submission }) {
-  const reviewChannel = await guild.channels.fetch(config.review_channel_id).catch(() => null);
+  const reviewChannelId = config.review_channel_id || APPLICATION_REVIEW_CHANNEL_ID;
+  const reviewChannel = await guild.channels.fetch(reviewChannelId).catch(() => null);
   if (!reviewChannel?.isTextBased?.()) {
     throw new Error("Configured review channel is missing or not text-based.");
   }
+
+  const assessment = await getApplicationAssessment(config, submission);
 
   const mentionRoles = uniq(config.ping_roles || []);
   const mentionContent = mentionRoles.length
@@ -1265,7 +1304,10 @@ async function createReviewArtifacts({ client, db, guild, user, config, submissi
 
   const sent = await reviewChannel.send({
     content: mentionContent,
-    embeds: [buildApplicationEmbed(config, submission, user)],
+    embeds: [
+      buildApplicationEmbed(config, submission, user),
+      buildReviewAssessmentEmbed(config, submission, assessment)
+    ],
     components: buildReviewComponents(submission.id),
     allowedMentions: { roles: mentionRoles, users: [user.id] }
   });
@@ -1297,6 +1339,7 @@ async function createReviewArtifacts({ client, db, guild, user, config, submissi
     JSON.stringify({
       submission_id: submission.id,
       application_key: config.key,
+      score: assessment.score,
       review_channel_id: reviewChannel.id,
       review_message_id: sent.id,
       review_thread_id: threadId
@@ -1311,8 +1354,9 @@ async function updateReviewMessage(client, submission, reviewerId, statusText, n
     ? await channel.messages.fetch(submission.review_message_id).catch(() => null)
     : null;
   if (!message?.embeds?.length) return;
+  const remainingEmbeds = message.embeds.slice(1).map(embed => EmbedBuilder.from(embed));
   await message.edit({
-    embeds: [buildReviewUpdatedEmbed(message.embeds[0], statusText, reviewerId, note)],
+    embeds: [buildReviewUpdatedEmbed(message.embeds[0], statusText, reviewerId, note), ...remainingEmbeds],
     components: keepButtons ? buildReviewComponents(submission.id) : []
   }).catch(error => {
     console.error("[Applications] Failed to update review message:", error);
