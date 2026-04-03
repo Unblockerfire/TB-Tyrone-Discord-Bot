@@ -175,6 +175,7 @@ function getApplicationDefaults() {
   const managerRoles = getDefaultManagerRoles();
   const blacklistRoleId = getBlacklistRoleId();
   const baseRestricted = uniq([TIMEOUT_TRACK_ROLE_ID, blacklistRoleId]);
+  const tiktokModRoleId = process.env.TIKTOK_MOD_ROLE_ID || process.env.STREAM_MOD_ROLE_ID || "";
 
   return [
     {
@@ -305,7 +306,7 @@ function getApplicationDefaults() {
         "Hey {{user}}, your {{application}} was denied this time. Thank you for applying.",
       required_roles: [VERIFIED_ROLE_ID],
       restricted_roles: baseRestricted,
-      accepted_roles: [],
+      accepted_roles: uniq([tiktokModRoleId]),
       denied_roles: [],
       accepted_removal_roles: [],
       denied_removal_roles: [],
@@ -328,14 +329,39 @@ function ensureApplicationDefaults(db) {
       continue;
     }
 
+    const merged = { ...existing };
+    let changed = false;
+
     if (
       !existing.review_channel_id ||
       LEGACY_APPLICATION_REVIEW_CHANNEL_IDS.includes(existing.review_channel_id)
     ) {
-      db.upsertApplicationConfig({
-        ...existing,
-        review_channel_id: APPLICATION_REVIEW_CHANNEL_ID
-      });
+      merged.review_channel_id = APPLICATION_REVIEW_CHANNEL_ID;
+      changed = true;
+    }
+
+    const fillIfMissing = [
+      "required_roles",
+      "restricted_roles",
+      "accepted_roles",
+      "denied_roles",
+      "accepted_removal_roles",
+      "denied_removal_roles",
+      "ping_roles",
+      "manager_roles"
+    ];
+
+    for (const key of fillIfMissing) {
+      const current = Array.isArray(existing[key]) ? existing[key] : [];
+      const fallback = Array.isArray(config[key]) ? config[key] : [];
+      if (!current.length && fallback.length) {
+        merged[key] = fallback;
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      db.upsertApplicationConfig(merged);
     }
   }
   return db.listApplicationConfigs();
@@ -1429,10 +1455,11 @@ async function handleReviewDecision(interaction, { client, db }, submissionId, a
 
   const applicant = await interaction.guild.members.fetch(submission.user_id).catch(() => null);
   let roleResult = { added: [], removed: [], errors: [] };
+  const intendedAddRoles = action === "accept" ? config.accepted_roles : config.denied_roles;
   if (applicant) {
     roleResult = await applyRoleChanges(
       applicant,
-      action === "accept" ? config.accepted_roles : config.denied_roles,
+      intendedAddRoles,
       action === "accept" ? config.accepted_removal_roles : config.denied_removal_roles
     );
   }
@@ -1468,9 +1495,15 @@ async function handleReviewDecision(interaction, { client, db }, submissionId, a
   await interaction.reply({
     content:
       `${action === "accept" ? "Accepted" : "Denied"} **${config.display_name}** for <@${submission.user_id}>.` +
+      (!intendedAddRoles.length
+        ? `\nNo ${action === "accept" ? "accepted" : "denied"} roles are configured for this application yet.`
+        : "") +
+      (roleResult.added.length
+        ? `\nRoles added: ${roleResult.added.map(roleId => `<@&${roleId}>`).join(", ")}`
+        : "") +
       (roleResult.errors.length ? `\nRole warnings:\n- ${roleResult.errors.join("\n- ")}` : ""),
     flags: MessageFlags.Ephemeral,
-    allowedMentions: { users: [submission.user_id] }
+    allowedMentions: { users: [submission.user_id], roles: roleResult.added }
   });
   return true;
 }
