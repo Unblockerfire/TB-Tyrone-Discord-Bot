@@ -94,6 +94,32 @@ const slashCommands = [
     .setDescription("Manage Tyrone application settings"),
 
   new SlashCommandBuilder()
+    .setName("application-toggle")
+    .setDescription("Open or close a staff application type")
+    .addStringOption(option =>
+      option
+        .setName("application")
+        .setDescription("Which application type to update")
+        .setRequired(true)
+        .addChoices(
+          { name: "Admin Application", value: "admin" },
+          { name: "Discord Mod Application", value: "discord_mod" },
+          { name: "Staff Support Team Application", value: "staff_support" },
+          { name: "TikTok Mod Application", value: "tiktok_mod" }
+        )
+    )
+    .addStringOption(option =>
+      option
+        .setName("status")
+        .setDescription("Whether the application should be open or closed")
+        .setRequired(true)
+        .addChoices(
+          { name: "Open", value: "open" },
+          { name: "Closed", value: "closed" }
+        )
+    ),
+
+  new SlashCommandBuilder()
     .setName("show-applications")
     .setDescription("Post the staff application viewer panel"),
 

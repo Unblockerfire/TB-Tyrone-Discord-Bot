@@ -331,7 +331,7 @@ function getConfigMap(db) {
 function isHeadAdmin(member) {
   if (!member) return false;
   if (member.permissions?.has?.(PermissionsBitField.Flags.Administrator)) return true;
-  return !!member.roles?.cache?.has?.(OWNER_ROLE_ID);
+  return getDefaultManagerRoles().some(roleId => member.roles?.cache?.has?.(roleId));
 }
 
 function canUseApplicationPanel(member) {
@@ -1667,6 +1667,47 @@ async function handleInteraction(interaction, { db }) {
 
     ensureApplicationDefaults(db);
     await renderAdminPanel(interaction, db, "admin");
+    return true;
+  }
+
+  if (interaction.commandName === "application-toggle") {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: "This command only works in a server.", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+
+    if (!isHeadAdmin(interaction.member)) {
+      await interaction.reply({ content: "Only Head Admin can use this command.", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+
+    ensureApplicationDefaults(db);
+    const key = interaction.options.getString("application", true);
+    const nextState = interaction.options.getString("status", true);
+    const config = db.getApplicationConfig(key);
+    if (!config) {
+      await interaction.reply({ content: "That application type could not be found.", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+
+    const updated = db.upsertApplicationConfig({
+      ...config,
+      open: nextState === "open"
+    });
+
+    console.log(
+      "[Applications] Status toggled",
+      JSON.stringify({
+        application_key: updated.key,
+        open: updated.open,
+        actor_user_id: interaction.user.id
+      })
+    );
+
+    await interaction.reply({
+      content: `**${updated.display_name}** is now **${updated.open ? "open" : "closed"}**.`,
+      flags: MessageFlags.Ephemeral
+    });
     return true;
   }
 
