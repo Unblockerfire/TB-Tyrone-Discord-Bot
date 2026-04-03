@@ -23,12 +23,6 @@ const COMMAND_GROUPS = [
     ]
   },
   {
-    title: "Songs",
-    commands: [
-      { usage: "!rqsong Song Name - Artist", detail: "Submit a song request in the song request channel." }
-    ]
-  },
-  {
     title: "Staff / Owner",
     commands: [
       { usage: "/tyrone-cleanup-setup", detail: "Post the Tyrone cleanup button panel." },

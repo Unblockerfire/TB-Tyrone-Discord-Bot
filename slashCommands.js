@@ -164,6 +164,10 @@ const slashCommands = [
     .setDescription("Post the Tyrone request/help panel (staff/admin only)"),
 
   new SlashCommandBuilder()
+    .setName("setup-rqsong")
+    .setDescription("Post the Tyrone song request button panel"),
+
+  new SlashCommandBuilder()
     .setName("setup-shoutout")
     .setDescription("Configure and post the Shoutout of the Day")
     .addChannelOption(option =>

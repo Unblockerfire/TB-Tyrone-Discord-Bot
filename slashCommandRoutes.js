@@ -61,6 +61,12 @@ const slashCommandRouteGroups = [
     commands: ["setup-requests"]
   },
   {
+    moduleKey: "songs",
+    modulePath: "./commands/songs",
+    handlerName: "handleInteraction",
+    commands: ["setup-rqsong"]
+  },
+  {
     moduleKey: "communityPosts",
     modulePath: "./commands/communityPosts",
     handlerName: "handleInteraction",

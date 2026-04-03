@@ -1,55 +1,141 @@
-// commands/songs.js
 const {
-  EmbedBuilder,
   ActionRowBuilder,
   ButtonBuilder,
-  ButtonStyle
+  ButtonStyle,
+  EmbedBuilder,
+  MessageFlags,
+  ModalBuilder,
+  PermissionsBitField,
+  TextInputBuilder,
+  TextInputStyle
 } = require("discord.js");
 
 const { searchTrack, addTrackToPlaylist } = require("./spotify");
 
-// sanity check so we can see in logs if Fly is loading this correctly
+const ADMIN_REVIEW_CHANNEL_ID = "1477155955505500261";
+const RQSONG_PANEL_CHANNEL_KEY = "songs.panel.channel_id";
+const RQSONG_PANEL_MESSAGE_KEY = "songs.panel.message_id";
+
+const RQSONG_OPEN_BUTTON_ID = "rqsong_open_modal";
+const RQSONG_MODAL_ID = "rqsong_request_modal";
+const RQSONG_SONG_INPUT_ID = "rqsong_song_input";
+const RQSONG_ARTIST_INPUT_ID = "rqsong_artist_input";
+const RQSONG_CONFIRM_ID = "songconfirm_yes";
+const RQSONG_EDIT_ID = "songconfirm_edit";
+
 console.log("[Songs] typeof searchTrack:", typeof searchTrack);
 console.log("[Songs] typeof addTrackToPlaylist:", typeof addTrackToPlaylist);
 
-// hardcoded admin review channel for approved requests
-const ADMIN_REVIEW_CHANNEL_ID = "1477155955505500261";
-
-// pending request memory
-// key = user id
-// value = {
-//   originalQuery,
-//   songName,
-//   artist,
-//   stage: "confirm" | "awaiting_edit",
-//   sourceMessageUrl
-// }
 const pendingSongRequests = new Map();
 
 function userHasAnyRole(member, roleIds) {
   return roleIds.some(id => member?.roles?.cache?.has(id));
 }
 
-function buildUserConfirmEmbed(songName, artist, originalQuery) {
+function canSetupSongPanel(member) {
+  if (!member) return false;
+  if (member.permissions?.has?.(PermissionsBitField.Flags.ManageChannels)) return true;
+  if (member.permissions?.has?.(PermissionsBitField.Flags.ManageGuild)) return true;
+  return false;
+}
+
+function buildPanelPayload() {
+  return {
+    embeds: [
+      new EmbedBuilder()
+        .setTitle("Song Requests")
+        .setColor(0x1db954)
+        .setDescription(
+          "Click the button below to request a song.\n" +
+          "Tyrone will search it first so you can confirm the right track before it gets submitted."
+        )
+    ],
+    components: [
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(RQSONG_OPEN_BUTTON_ID)
+          .setLabel("Request a Song")
+          .setStyle(ButtonStyle.Primary)
+      )
+    ]
+  };
+}
+
+function isSongPanelMessage(message, botUserId) {
+  if (!message) return false;
+  if (botUserId && message.author?.id !== botUserId) return false;
+
+  const hasMatchingEmbed = message.embeds?.some(embed => embed.title === "Song Requests");
+  const hasMatchingButton = message.components?.some(row =>
+    row.components?.some(component => component.customId === RQSONG_OPEN_BUTTON_ID)
+  );
+
+  return Boolean(hasMatchingEmbed && hasMatchingButton);
+}
+
+async function deleteExistingSongPanels(channel, botUserId) {
+  if (!channel?.isTextBased?.()) return 0;
+
+  let deleted = 0;
+  const recentMessages = await channel.messages.fetch({ limit: 25 }).catch(() => null);
+  if (!recentMessages) return 0;
+
+  for (const message of recentMessages.values()) {
+    if (!isSongPanelMessage(message, botUserId)) continue;
+    await message.delete().catch(() => null);
+    deleted += 1;
+  }
+
+  return deleted;
+}
+
+function buildSongRequestModal(defaults = {}) {
+  return new ModalBuilder()
+    .setCustomId(RQSONG_MODAL_ID)
+    .setTitle("Request a Song")
+    .addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId(RQSONG_SONG_INPUT_ID)
+          .setLabel("Song")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+          .setMaxLength(150)
+          .setValue(defaults.song || "")
+      ),
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId(RQSONG_ARTIST_INPUT_ID)
+          .setLabel("Artist")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+          .setMaxLength(150)
+          .setValue(defaults.artist || "")
+      )
+    );
+}
+
+function buildUserConfirmEmbed(pending) {
   return new EmbedBuilder()
     .setTitle("Confirm Song Request")
     .setColor(0x1db954)
-    .setDescription("Is this the correct song request?")
+    .setDescription("Is this the correct song?")
     .addFields(
-      { name: "Song Name", value: songName || "Unknown", inline: false },
-      { name: "Artist", value: artist || "Unknown", inline: false },
-      { name: "Original Input", value: originalQuery || "None", inline: false }
+      { name: "Song Name", value: pending.trackName || "Unknown", inline: false },
+      { name: "Artist", value: pending.trackArtists || "Unknown", inline: false },
+      { name: "Your Search", value: `${pending.songInput} - ${pending.artistInput}`, inline: false },
+      { name: "Spotify", value: pending.trackUrl || "No Spotify URL available", inline: false }
     )
     .setTimestamp(new Date());
 }
 
-function buildAdminEmbed(userId, songName, artist, sourceMessageUrl) {
+function buildAdminEmbed(userId, pending) {
   return new EmbedBuilder()
     .setTitle("Song Request")
     .setColor(0x1db954)
     .addFields(
-      { name: "Song Name", value: songName || "Unknown", inline: false },
-      { name: "Artist", value: artist || "Unknown", inline: false },
+      { name: "Song Name", value: pending.trackName || "Unknown", inline: false },
+      { name: "Artist", value: pending.trackArtists || "Unknown", inline: false },
       {
         name: "Requested by",
         value: `<@${userId}> (${userId})`,
@@ -61,8 +147,13 @@ function buildAdminEmbed(userId, songName, artist, sourceMessageUrl) {
         inline: true
       },
       {
-        name: "Channel message",
-        value: sourceMessageUrl ? `[Jump to message](${sourceMessageUrl})` : "N/A",
+        name: "User Search",
+        value: `${pending.songInput} - ${pending.artistInput}`,
+        inline: false
+      },
+      {
+        name: "Spotify",
+        value: pending.trackUrl || "No Spotify URL available",
         inline: false
       }
     )
@@ -72,12 +163,12 @@ function buildAdminEmbed(userId, songName, artist, sourceMessageUrl) {
 function buildConfirmButtons() {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId("songconfirm_yes")
-      .setLabel("Yes")
+      .setCustomId(RQSONG_CONFIRM_ID)
+      .setLabel("Submit")
       .setStyle(ButtonStyle.Success),
     new ButtonBuilder()
-      .setCustomId("songconfirm_edit")
-      .setLabel("No / Edit")
+      .setCustomId(RQSONG_EDIT_ID)
+      .setLabel("Edit Search")
       .setStyle(ButtonStyle.Secondary)
   );
 }
@@ -95,134 +186,84 @@ function buildAdminButtons(requestId) {
   );
 }
 
-// ---------- MESSAGE HANDLER ----------
+async function handleInteraction(interaction, { db } = {}) {
+  if (!interaction.isChatInputCommand()) return false;
+  if (interaction.commandName !== "setup-rqsong") return false;
 
-async function handleMessage(message) {
-  const recommendChannelId = process.env.SONG_RECOMMEND_CHANNEL_ID;
-
-  if (!recommendChannelId) return;
-  if (message.author.bot) return;
-  if (message.channelId !== recommendChannelId) return;
-
-  const content = (message.content || "").trim();
-  const lower = content.toLowerCase();
-
-  // 1) Initial command
-  if (lower.startsWith("!rqsong")) {
-    const query = content.slice("!rqsong".length).trim();
-
-    if (!query) {
-      return message.reply(
-        "Please provide a song request, like: `!rqsong Song Name - Artist`"
-      );
-    }
-
-    // Basic parser: split on " - " first, fallback unknown artist
-    let songName = query;
-    let artist = "Unknown";
-
-    if (query.includes(" - ")) {
-      const parts = query.split(" - ");
-      songName = parts[0]?.trim() || "Unknown";
-      artist = parts.slice(1).join(" - ").trim() || "Unknown";
-    }
-
-    pendingSongRequests.set(message.author.id, {
-      originalQuery: query,
-      songName,
-      artist,
-      stage: "confirm",
-      sourceMessageUrl: message.url
+  if (!interaction.inGuild()) {
+    await interaction.reply({
+      content: "This command can only be used in a server.",
+      flags: MessageFlags.Ephemeral
     });
-
-    const embed = buildUserConfirmEmbed(songName, artist, query);
-
-    await message.reply({
-      embeds: [embed],
-      components: [buildConfirmButtons()]
-    });
-
-    return;
+    return true;
   }
 
-  // 2) Edit follow-up
-  const pending = pendingSongRequests.get(message.author.id);
-  if (!pending) return;
-
-  if (pending.stage === "awaiting_edit") {
-    // expected format: Song Name | Artist Name
-    if (!content.includes("|")) {
-      await message.reply(
-        "Please reply in this format: `Song Name | Artist Name`"
-      );
-      return;
-    }
-
-    const [songRaw, artistRaw] = content.split("|");
-    const songName = songRaw?.trim();
-    const artist = artistRaw?.trim();
-
-    if (!songName || !artist) {
-      await message.reply(
-        "I need both parts. Use this format: `Song Name | Artist Name`"
-      );
-      return;
-    }
-
-    pending.songName = songName;
-    pending.artist = artist;
-    pending.stage = "confirm";
-
-    pendingSongRequests.set(message.author.id, pending);
-
-    const embed = buildUserConfirmEmbed(
-      pending.songName,
-      pending.artist,
-      pending.originalQuery
-    );
-
-    await message.reply({
-      content: "Got it. Please confirm this updated request.",
-      embeds: [embed],
-      components: [buildConfirmButtons()]
+  if (!canSetupSongPanel(interaction.member)) {
+    await interaction.reply({
+      content: "You do not have permission to post the song request panel.",
+      flags: MessageFlags.Ephemeral
     });
-
-    return;
+    return true;
   }
+
+  const deletedCount = await deleteExistingSongPanels(interaction.channel, interaction.client.user?.id);
+  const posted = await interaction.channel.send(buildPanelPayload());
+  db?.setManyAppSettings?.({
+    [RQSONG_PANEL_CHANNEL_KEY]: posted.channelId,
+    [RQSONG_PANEL_MESSAGE_KEY]: posted.id
+  });
+
+  console.log(
+    "[Songs] Panel setup",
+    JSON.stringify({
+      guild_id: interaction.guildId,
+      channel_id: interaction.channelId,
+      user_id: interaction.user.id,
+      deleted_previous_count: deletedCount
+    })
+  );
+
+  await interaction.reply({
+    content: "Song request panel posted ✅",
+    flags: MessageFlags.Ephemeral
+  });
+
+  return true;
 }
 
-// ---------- BUTTON HANDLER ----------
-// Returns true if handled, false otherwise.
+async function handleMessage() {
+  return false;
+}
 
 async function handleButton(interaction) {
   const customId = interaction.customId || "";
 
-  // ---------- USER CONFIRM BUTTONS ----------
-  if (customId === "songconfirm_yes" || customId === "songconfirm_edit") {
+  if (customId === RQSONG_OPEN_BUTTON_ID) {
+    await interaction.showModal(buildSongRequestModal());
+    return true;
+  }
+
+  if (customId === RQSONG_CONFIRM_ID || customId === RQSONG_EDIT_ID) {
     const pending = pendingSongRequests.get(interaction.user.id);
 
     if (!pending) {
       await interaction.reply({
         content: "I do not have a pending song request for you right now.",
-        ephemeral: true
+        flags: MessageFlags.Ephemeral
       });
       return true;
     }
 
-    if (customId === "songconfirm_edit") {
-      pending.stage = "awaiting_edit";
-      pendingSongRequests.set(interaction.user.id, pending);
-
-      await interaction.reply({
-        content:
-          "Alright, send the corrected info in this channel like this:\n`Song Name | Artist Name`",
-        ephemeral: true
-      });
-
+    if (customId === RQSONG_EDIT_ID) {
+      await interaction.showModal(
+        buildSongRequestModal({
+          song: pending.songInput,
+          artist: pending.artistInput
+        })
+      );
       return true;
     }
 
-    // YES path → send to admin review channel
     const adminChannel = await interaction.guild.channels
       .fetch(ADMIN_REVIEW_CHANNEL_ID)
       .catch(() => null);
@@ -230,19 +271,13 @@ async function handleButton(interaction) {
     if (!adminChannel || !adminChannel.isTextBased()) {
       await interaction.reply({
         content: "Admin review channel is invalid or missing.",
-        ephemeral: true
+        flags: MessageFlags.Ephemeral
       });
       return true;
     }
 
     const requestId = `${Date.now()}_${interaction.user.id}`;
-
-    const embed = buildAdminEmbed(
-      interaction.user.id,
-      pending.songName,
-      pending.artist,
-      pending.sourceMessageUrl
-    );
+    const embed = buildAdminEmbed(interaction.user.id, pending);
 
     await adminChannel.send({
       content: `New song request from <@${interaction.user.id}>`,
@@ -254,15 +289,13 @@ async function handleButton(interaction) {
 
     await interaction.reply({
       content: "Your song request has been sent to the admin review channel.",
-      ephemeral: true
+      flags: MessageFlags.Ephemeral
     });
 
     return true;
   }
 
-  // ---------- ADMIN APPROVE / DECLINE ----------
   const [action] = customId.split("_");
-
   if (action !== "songapprove" && action !== "songdecline") {
     return false;
   }
@@ -273,34 +306,29 @@ async function handleButton(interaction) {
     .filter(Boolean);
 
   const playlistId = process.env.SPOTIFY_PLAYLIST_ID;
-
   const member = interaction.member;
+
   if (!userHasAnyRole(member, approverRoleIds)) {
     await interaction.reply({
       content: "You do not have permission to approve or decline song requests.",
-      ephemeral: true
+      flags: MessageFlags.Ephemeral
     });
     return true;
   }
 
-  if (
-    !interaction.message ||
-    !interaction.message.embeds ||
-    interaction.message.embeds.length === 0
-  ) {
+  if (!interaction.message?.embeds?.length) {
     await interaction.reply({
       content: "This song request has no data attached.",
-      ephemeral: true
+      flags: MessageFlags.Ephemeral
     });
     return true;
   }
 
   const embed = EmbedBuilder.from(interaction.message.embeds[0]);
   const fields = embed.data.fields || [];
-
-  const songField = fields.find(f => f.name === "Song Name");
-  const artistField = fields.find(f => f.name === "Artist");
-  const statusField = fields.find(f => f.name === "Status");
+  const songField = fields.find(field => field.name === "Song Name");
+  const artistField = fields.find(field => field.name === "Artist");
+  const statusField = fields.find(field => field.name === "Status");
 
   const songName = songField ? songField.value : null;
   const artist = artistField ? artistField.value : null;
@@ -308,7 +336,7 @@ async function handleButton(interaction) {
   if (!songName) {
     await interaction.reply({
       content: "Could not find the song info on this request.",
-      ephemeral: true
+      flags: MessageFlags.Ephemeral
     });
     return true;
   }
@@ -316,25 +344,24 @@ async function handleButton(interaction) {
   if (statusField && statusField.value !== "Pending approval") {
     await interaction.reply({
       content: `This song request is already processed. Current status: **${statusField.value}**`,
-      ephemeral: true
+      flags: MessageFlags.Ephemeral
     });
     return true;
   }
 
-  // Decline path
   if (action === "songdecline") {
-    const newFields = fields.map(f => {
-      if (f.name === "Status") {
-        return {
-          name: "Status",
-          value: `Declined by <@${interaction.user.id}>`,
-          inline: f.inline
-        };
-      }
-      return f;
-    });
-
-    embed.setFields(newFields);
+    embed.setFields(
+      fields.map(field => {
+        if (field.name === "Status") {
+          return {
+            name: "Status",
+            value: `Declined by <@${interaction.user.id}>`,
+            inline: field.inline
+          };
+        }
+        return field;
+      })
+    );
 
     await interaction.update({
       content: interaction.message.content,
@@ -344,13 +371,12 @@ async function handleButton(interaction) {
 
     await interaction.followUp({
       content: "Song request declined.",
-      ephemeral: true
+      flags: MessageFlags.Ephemeral
     });
 
     return true;
   }
 
-  // Approve path
   let resultText = "";
   const searchQuery =
     artist && artist !== "Unknown" ? `${songName} - ${artist}` : songName;
@@ -371,23 +397,23 @@ async function handleButton(interaction) {
           (track.url ? track.url : "");
       }
     }
-  } catch (err) {
-    console.error("Spotify add track error:", err);
+  } catch (error) {
+    console.error("Spotify add track error:", error);
     resultText = "Failed to add song to Spotify playlist. Check logs and credentials.";
   }
 
-  const newFields = fields.map(f => {
-    if (f.name === "Status") {
-      return {
-        name: "Status",
-        value: `Approved by <@${interaction.user.id}>`,
-        inline: f.inline
-      };
-    }
-    return f;
-  });
-
-  embed.setFields(newFields);
+  embed.setFields(
+    fields.map(field => {
+      if (field.name === "Status") {
+        return {
+          name: "Status",
+          value: `Approved by <@${interaction.user.id}>`,
+          inline: field.inline
+        };
+      }
+      return field;
+    })
+  );
 
   await interaction.update({
     content: interaction.message.content,
@@ -397,15 +423,88 @@ async function handleButton(interaction) {
 
   await interaction.followUp({
     content: resultText,
-    ephemeral: true
+    flags: MessageFlags.Ephemeral
   });
 
   return true;
 }
 
+async function handleModalSubmit(interaction) {
+  if (!interaction.isModalSubmit()) return false;
+  if (interaction.customId !== RQSONG_MODAL_ID) return false;
+
+  const songInput = interaction.fields.getTextInputValue(RQSONG_SONG_INPUT_ID).trim();
+  const artistInput = interaction.fields.getTextInputValue(RQSONG_ARTIST_INPUT_ID).trim();
+  const searchQuery = `${songInput} - ${artistInput}`;
+
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  try {
+    const track = await searchTrack(searchQuery);
+    if (!track) {
+      await interaction.editReply(
+        "I couldn’t find a matching song on Spotify. Try a slightly different song or artist name."
+      );
+      return true;
+    }
+
+    const pending = {
+      songInput,
+      artistInput,
+      trackName: track.name || songInput,
+      trackArtists: Array.isArray(track.artists) && track.artists.length
+        ? track.artists.join(", ")
+        : artistInput,
+      trackUri: track.uri || null,
+      trackUrl: track.url || null
+    };
+
+    pendingSongRequests.set(interaction.user.id, pending);
+
+    await interaction.editReply({
+      embeds: [buildUserConfirmEmbed(pending)],
+      components: [buildConfirmButtons()]
+    });
+
+    return true;
+  } catch (error) {
+    console.error("[Songs] Spotify search error:", error);
+    await interaction.editReply("I hit an error while searching Spotify. Try again in a moment.");
+    return true;
+  }
+}
+
+async function refreshSongPanel(client, db, { reason = "manual_refresh" } = {}) {
+  const channelId = db?.getAppSetting?.(RQSONG_PANEL_CHANNEL_KEY)?.value || process.env.SONG_RECOMMEND_CHANNEL_ID;
+  if (!channelId) return false;
+
+  const channel = await client.channels.fetch(channelId).catch(() => null);
+  if (!channel?.isTextBased?.()) return false;
+
+  const deletedCount = await deleteExistingSongPanels(channel, client.user?.id);
+  const posted = await channel.send(buildPanelPayload());
+  db?.setManyAppSettings?.({
+    [RQSONG_PANEL_CHANNEL_KEY]: posted.channelId,
+    [RQSONG_PANEL_MESSAGE_KEY]: posted.id
+  });
+
+  console.log(
+    "[Songs] Panel refreshed",
+    JSON.stringify({
+      reason,
+      channel_id: posted.channelId,
+      message_id: posted.id,
+      deleted_previous_count: deletedCount
+    })
+  );
+
+  return true;
+}
+
 module.exports = {
+  handleInteraction,
   handleMessage,
-  handleButton
+  handleButton,
+  handleModalSubmit,
+  refreshSongPanel
 };
-
-

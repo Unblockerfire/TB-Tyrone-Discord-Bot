@@ -54,6 +54,7 @@ const slashCommandModules = {
   privateVc,
   bangCommands,
   requests,
+  songs,
   communityPosts,
   applications,
   staffPanels,
@@ -629,6 +630,12 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     if (interaction.isModalSubmit()) {
+      const handledBySongs =
+        songs && typeof songs.handleModalSubmit === "function"
+          ? await songs.handleModalSubmit(interaction, { client, db })
+          : false;
+      if (handledBySongs) return;
+
       const handledByApplications =
         applications && typeof applications.handleModalSubmit === "function"
           ? await applications.handleModalSubmit(interaction, { client, db })
