@@ -138,6 +138,10 @@ const slashCommands = [
     ),
 
   new SlashCommandBuilder()
+    .setName("manage-forms")
+    .setDescription("Open the existing Tyrone forms manager"),
+
+  new SlashCommandBuilder()
     .setName("setup-live")
     .setDescription("Post the Live Notifications role button panel (owner/admin)"),
 

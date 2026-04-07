@@ -20,6 +20,7 @@ const FORM_TIME_LIMIT_MS = 60 * 60 * 1000;
 const FORM_TICK_MS = 60 * 1000;
 
 const CREATE_FORM_COMMAND = "create-form";
+const MANAGE_FORMS_COMMAND = "manage-forms";
 const ADD_QUESTION_PREFIX = "form:editor:add:";
 const REMOVE_SELECT_PREFIX = "form:editor:remove_select:";
 const PREVIEW_PREFIX = "form:editor:preview:";
@@ -28,6 +29,7 @@ const PUBLISH_PREFIX = "form:editor:publish:";
 const DELETE_PREFIX = "form:editor:delete:";
 const REFRESH_EDITOR_PREFIX = "form:editor:refresh:";
 const QUESTION_MODAL_PREFIX = "form:editor:add_modal:";
+const MANAGE_SELECT_ID = "form:manage:select";
 
 const START_PREFIX = "form:start:";
 const CANCEL_PREFIX = "form:cancel:";
@@ -203,6 +205,44 @@ function buildFormEditorComponents(form) {
   }
 
   return rows;
+}
+
+function buildManageFormsPayload(forms) {
+  const embed = new EmbedBuilder()
+    .setTitle("Manage Forms")
+    .setColor(0x5865f2)
+    .setDescription(
+      forms.length
+        ? "Choose a form to reopen its editor."
+        : "No forms exist yet. Use `/create-form` first."
+    );
+
+  const components = [];
+  if (forms.length) {
+    components.push(
+      new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(MANAGE_SELECT_ID)
+          .setPlaceholder("Choose a form")
+          .addOptions(
+            forms.slice(0, 25).map(form => ({
+              label: shortText(form.title, 100),
+              value: String(form.id),
+              description: shortText(
+                `${form.status} • ${form.questions.length} question${form.questions.length === 1 ? "" : "s"} • ${form.post_channel_id ? `#${form.post_channel_id}` : "no channel"}`,
+                100
+              )
+            }))
+          )
+      )
+    );
+  }
+
+  return {
+    embeds: [embed],
+    components,
+    flags: MessageFlags.Ephemeral
+  };
 }
 
 function buildFormPreviewEmbeds(form) {
@@ -715,7 +755,7 @@ async function refreshPublishedFormPanels(client, db, { reason = "manual_refresh
 
 async function handleInteraction(interaction, { db } = {}) {
   if (!interaction.isChatInputCommand()) return false;
-  if (interaction.commandName !== CREATE_FORM_COMMAND) return false;
+  if (![CREATE_FORM_COMMAND, MANAGE_FORMS_COMMAND].includes(interaction.commandName)) return false;
 
   if (!interaction.inGuild()) {
     await interaction.reply({ content: "This command only works in a server.", flags: MessageFlags.Ephemeral });
@@ -724,6 +764,12 @@ async function handleInteraction(interaction, { db } = {}) {
 
   if (!isFormManager(interaction.member)) {
     await interaction.reply({ content: "You do not have permission to create forms.", flags: MessageFlags.Ephemeral });
+    return true;
+  }
+
+  if (interaction.commandName === MANAGE_FORMS_COMMAND) {
+    const forms = db.listFormConfigsByGuild(interaction.guildId);
+    await interaction.reply(buildManageFormsPayload(forms));
     return true;
   }
 
@@ -970,6 +1016,22 @@ async function handleButton(interaction, { client, db } = {}) {
 async function handleSelectMenu(interaction, { client, db } = {}) {
   if (!(interaction.isStringSelectMenu() || interaction.isChannelSelectMenu())) return false;
   const customId = interaction.customId || "";
+
+  if (customId === MANAGE_SELECT_ID) {
+    const formId = Number(interaction.values?.[0] || 0);
+    const form = db.getFormConfigById(formId);
+    if (!form || !isFormManager(interaction.member)) {
+      await interaction.reply({ content: "You cannot manage that form.", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+
+    if (form.status === "published") {
+      await renderPreviewReply(interaction, db, form.id);
+    } else {
+      await renderEditorReply(interaction, db, form.id);
+    }
+    return true;
+  }
 
   if (customId.startsWith(REMOVE_SELECT_PREFIX)) {
     const formId = Number(customId.slice(REMOVE_SELECT_PREFIX.length));
