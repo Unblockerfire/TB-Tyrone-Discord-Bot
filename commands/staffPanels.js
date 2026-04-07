@@ -18,6 +18,7 @@ const privateVc = require("./privateVc");
 const requests = require("./requests");
 const songs = require("./songs");
 const tickets = require("./tickets");
+const forms = require("./forms");
 
 const OWNER_ROLE_ID = "1113158001604427966";
 const TYRONE_CLEANUP_ALLOWED_ROLE_ID = "1112945506549768302";
@@ -176,6 +177,7 @@ async function refreshTrackedTyroneButtons(client, db, { reason = "manual_refres
     () => applications.refreshApplicationViewerPanel?.(client, db, { reason }),
     () => requests.refreshRequestPanel?.(client, db, { reason }),
     () => songs.refreshSongPanel?.(client, db, { reason }),
+    () => forms.refreshPublishedFormPanels?.(client, db, { reason }),
     () => tickets.refreshSupportPanel?.(client, db, { reason }),
     () => privateVc.refreshPrivateVcPanel?.(client, db, { reason }),
     () => refreshCleanupPanel(client, db, { reason })

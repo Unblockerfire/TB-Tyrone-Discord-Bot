@@ -1,4 +1,4 @@
-const { SlashCommandBuilder } = require("discord.js");
+const { ChannelType, SlashCommandBuilder } = require("discord.js");
 
 const slashCommands = [
   new SlashCommandBuilder()
@@ -122,6 +122,28 @@ const slashCommands = [
   new SlashCommandBuilder()
     .setName("show-applications")
     .setDescription("Post the staff application viewer panel"),
+
+  new SlashCommandBuilder()
+    .setName("create-form")
+    .setDescription("Create a Tyrone form draft and open the form editor")
+    .addStringOption(option =>
+      option.setName("title").setDescription("Form title").setRequired(true)
+    )
+    .addIntegerOption(option =>
+      option
+        .setName("question_count")
+        .setDescription("How many questions this form should have")
+        .setRequired(true)
+        .setMinValue(1)
+        .setMaxValue(20)
+    )
+    .addChannelOption(option =>
+      option
+        .setName("channel")
+        .setDescription("Where Tyrone should post the form panel")
+        .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
+        .setRequired(true)
+    ),
 
   new SlashCommandBuilder()
     .setName("setup-live")

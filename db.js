@@ -250,6 +250,42 @@ db.prepare(`
   )
 `).run();
 
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS form_configs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    key TEXT NOT NULL UNIQUE,
+    guild_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    target_question_count INTEGER NOT NULL DEFAULT 1,
+    questions_json TEXT NOT NULL DEFAULT '[]',
+    post_channel_id TEXT,
+    review_channel_id TEXT,
+    panel_message_id TEXT,
+    status TEXT NOT NULL DEFAULT 'draft',
+    created_by TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )
+`).run();
+
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS form_responses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    form_id INTEGER NOT NULL,
+    user_id TEXT NOT NULL,
+    guild_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    answers_json TEXT NOT NULL DEFAULT '[]',
+    current_question_index INTEGER NOT NULL DEFAULT 0,
+    started_at INTEGER NOT NULL,
+    expires_at INTEGER,
+    submitted_at INTEGER,
+    review_channel_id TEXT,
+    review_message_id TEXT,
+    updated_at INTEGER NOT NULL
+  )
+`).run();
+
 // ---------- FORTNITE TABLES ----------
 
 // fortnite_links: Discord user <-> Fortnite username link + verification/rules status
@@ -2133,6 +2169,160 @@ const listDueExpiredApplicationSubmissionsStmt = db.prepare(`
   ORDER BY expires_at ASC, id ASC
 `);
 
+const getFormConfigByIdStmt = db.prepare(`
+  SELECT *
+  FROM form_configs
+  WHERE id = ?
+`);
+
+const getFormConfigByKeyStmt = db.prepare(`
+  SELECT *
+  FROM form_configs
+  WHERE key = ?
+`);
+
+const listFormConfigsByGuildStmt = db.prepare(`
+  SELECT *
+  FROM form_configs
+  WHERE guild_id = ?
+  ORDER BY updated_at DESC, id DESC
+`);
+
+const listPublishedFormConfigsStmt = db.prepare(`
+  SELECT *
+  FROM form_configs
+  WHERE status = 'published'
+  ORDER BY updated_at DESC, id DESC
+`);
+
+const createFormConfigStmt = db.prepare(`
+  INSERT INTO form_configs (
+    key,
+    guild_id,
+    title,
+    target_question_count,
+    questions_json,
+    post_channel_id,
+    review_channel_id,
+    panel_message_id,
+    status,
+    created_by,
+    created_at,
+    updated_at
+  )
+  VALUES (
+    @key,
+    @guild_id,
+    @title,
+    @target_question_count,
+    @questions_json,
+    @post_channel_id,
+    @review_channel_id,
+    @panel_message_id,
+    @status,
+    @created_by,
+    @created_at,
+    @updated_at
+  )
+`);
+
+const updateFormConfigStmt = db.prepare(`
+  UPDATE form_configs
+  SET title = @title,
+      target_question_count = @target_question_count,
+      questions_json = @questions_json,
+      post_channel_id = @post_channel_id,
+      review_channel_id = @review_channel_id,
+      panel_message_id = @panel_message_id,
+      status = @status,
+      updated_at = @updated_at
+  WHERE id = @id
+`);
+
+const deleteFormConfigStmt = db.prepare(`
+  DELETE FROM form_configs
+  WHERE id = ?
+`);
+
+const getFormResponseStmt = db.prepare(`
+  SELECT *
+  FROM form_responses
+  WHERE id = ?
+`);
+
+const getActiveFormResponseForUserStmt = db.prepare(`
+  SELECT *
+  FROM form_responses
+  WHERE form_id = ?
+    AND user_id = ?
+    AND guild_id = ?
+    AND status = 'in_progress'
+  ORDER BY started_at DESC, id DESC
+  LIMIT 1
+`);
+
+const listRecentFormResponsesByGuildStmt = db.prepare(`
+  SELECT *
+  FROM form_responses
+  WHERE guild_id = ?
+    AND status = 'submitted'
+  ORDER BY COALESCE(submitted_at, started_at) DESC, id DESC
+  LIMIT ?
+`);
+
+const createFormResponseStmt = db.prepare(`
+  INSERT INTO form_responses (
+    form_id,
+    user_id,
+    guild_id,
+    status,
+    answers_json,
+    current_question_index,
+    started_at,
+    expires_at,
+    submitted_at,
+    review_channel_id,
+    review_message_id,
+    updated_at
+  )
+  VALUES (
+    @form_id,
+    @user_id,
+    @guild_id,
+    @status,
+    @answers_json,
+    @current_question_index,
+    @started_at,
+    @expires_at,
+    @submitted_at,
+    @review_channel_id,
+    @review_message_id,
+    @updated_at
+  )
+`);
+
+const updateFormResponseStmt = db.prepare(`
+  UPDATE form_responses
+  SET status = @status,
+      answers_json = @answers_json,
+      current_question_index = @current_question_index,
+      expires_at = @expires_at,
+      submitted_at = @submitted_at,
+      review_channel_id = @review_channel_id,
+      review_message_id = @review_message_id,
+      updated_at = @updated_at
+  WHERE id = @id
+`);
+
+const listDueExpiredFormResponsesStmt = db.prepare(`
+  SELECT *
+  FROM form_responses
+  WHERE status = 'in_progress'
+    AND expires_at IS NOT NULL
+    AND expires_at <= ?
+  ORDER BY expires_at ASC, id ASC
+`);
+
 function listChecklistItems() {
   return listChecklistItemsStmt.all();
 }
@@ -2205,6 +2395,33 @@ function normalizeApplicationSubmissionRow(row) {
   if (!row) return null;
   return {
     ...row,
+    answers: parseJsonValue(row.answers_json, []),
+    current_question_index: Number(row.current_question_index || 0),
+    started_at: Number(row.started_at || 0),
+    expires_at: row.expires_at ? Number(row.expires_at) : null,
+    submitted_at: row.submitted_at ? Number(row.submitted_at) : null,
+    updated_at: Number(row.updated_at || 0)
+  };
+}
+
+function normalizeFormConfigRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    id: Number(row.id),
+    target_question_count: Number(row.target_question_count || 1),
+    questions: parseJsonValue(row.questions_json, []),
+    created_at: Number(row.created_at || 0),
+    updated_at: Number(row.updated_at || 0)
+  };
+}
+
+function normalizeFormResponseRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    id: Number(row.id),
+    form_id: Number(row.form_id || 0),
     answers: parseJsonValue(row.answers_json, []),
     current_question_index: Number(row.current_question_index || 0),
     started_at: Number(row.started_at || 0),
@@ -2369,6 +2586,172 @@ function expireDueApplicationSubmissions(now = Date.now()) {
   return rows.map(row => getApplicationSubmission(row.id)).filter(Boolean);
 }
 
+function createFormConfig(payload = {}) {
+  const now = Date.now();
+  const info = createFormConfigStmt.run({
+    key: String(payload.key || "").trim(),
+    guild_id: String(payload.guild_id || "").trim(),
+    title: String(payload.title || "").trim(),
+    target_question_count: Math.max(1, Number(payload.target_question_count || 1)),
+    questions_json: JSON.stringify(Array.isArray(payload.questions) ? payload.questions : []),
+    post_channel_id: payload.post_channel_id ? String(payload.post_channel_id) : null,
+    review_channel_id: payload.review_channel_id ? String(payload.review_channel_id) : null,
+    panel_message_id: payload.panel_message_id ? String(payload.panel_message_id) : null,
+    status: String(payload.status || "draft"),
+    created_by: payload.created_by ? String(payload.created_by) : null,
+    created_at: now,
+    updated_at: now
+  });
+  return getFormConfigById(info.lastInsertRowid);
+}
+
+function getFormConfigById(id) {
+  return normalizeFormConfigRow(getFormConfigByIdStmt.get(Number(id)));
+}
+
+function getFormConfigByKey(key) {
+  return normalizeFormConfigRow(getFormConfigByKeyStmt.get(String(key || "").trim()));
+}
+
+function listFormConfigsByGuild(guildId) {
+  return listFormConfigsByGuildStmt.all(String(guildId || "")).map(normalizeFormConfigRow);
+}
+
+function listPublishedFormConfigs() {
+  return listPublishedFormConfigsStmt.all().map(normalizeFormConfigRow);
+}
+
+function updateFormConfig(id, payload = {}) {
+  const current = getFormConfigById(id);
+  if (!current) return null;
+
+  updateFormConfigStmt.run({
+    id: Number(id),
+    title: payload.title === undefined ? current.title : String(payload.title || "").trim(),
+    target_question_count:
+      payload.target_question_count === undefined
+        ? current.target_question_count
+        : Math.max(1, Number(payload.target_question_count || 1)),
+    questions_json: JSON.stringify(Array.isArray(payload.questions) ? payload.questions : current.questions),
+    post_channel_id:
+      payload.post_channel_id === undefined
+        ? current.post_channel_id
+        : payload.post_channel_id === null
+          ? null
+          : String(payload.post_channel_id),
+    review_channel_id:
+      payload.review_channel_id === undefined
+        ? current.review_channel_id
+        : payload.review_channel_id === null
+          ? null
+          : String(payload.review_channel_id),
+    panel_message_id:
+      payload.panel_message_id === undefined
+        ? current.panel_message_id
+        : payload.panel_message_id === null
+          ? null
+          : String(payload.panel_message_id),
+    status: payload.status === undefined ? current.status : String(payload.status),
+    updated_at: Date.now()
+  });
+
+  return getFormConfigById(id);
+}
+
+function deleteFormConfig(id) {
+  return deleteFormConfigStmt.run(Number(id));
+}
+
+function createFormResponse(payload = {}) {
+  const now = Date.now();
+  const info = createFormResponseStmt.run({
+    form_id: Number(payload.form_id || 0),
+    user_id: String(payload.user_id || "").trim(),
+    guild_id: String(payload.guild_id || "").trim(),
+    status: String(payload.status || "in_progress"),
+    answers_json: JSON.stringify(Array.isArray(payload.answers) ? payload.answers : []),
+    current_question_index: Number(payload.current_question_index || 0),
+    started_at: Number(payload.started_at || now),
+    expires_at: payload.expires_at ? Number(payload.expires_at) : null,
+    submitted_at: payload.submitted_at ? Number(payload.submitted_at) : null,
+    review_channel_id: payload.review_channel_id ? String(payload.review_channel_id) : null,
+    review_message_id: payload.review_message_id ? String(payload.review_message_id) : null,
+    updated_at: now
+  });
+  return getFormResponse(info.lastInsertRowid);
+}
+
+function getFormResponse(id) {
+  return normalizeFormResponseRow(getFormResponseStmt.get(Number(id)));
+}
+
+function getActiveFormResponseForUser(formId, userId, guildId) {
+  return normalizeFormResponseRow(
+    getActiveFormResponseForUserStmt.get(Number(formId), String(userId || ""), String(guildId || ""))
+  );
+}
+
+function updateFormResponse(id, payload = {}) {
+  const current = getFormResponse(id);
+  if (!current) return null;
+
+  updateFormResponseStmt.run({
+    id: Number(id),
+    status: payload.status === undefined ? current.status : String(payload.status),
+    answers_json: JSON.stringify(Array.isArray(payload.answers) ? payload.answers : current.answers),
+    current_question_index:
+      payload.current_question_index === undefined
+        ? current.current_question_index
+        : Number(payload.current_question_index || 0),
+    expires_at:
+      payload.expires_at === undefined
+        ? current.expires_at
+        : payload.expires_at === null
+          ? null
+          : Number(payload.expires_at),
+    submitted_at:
+      payload.submitted_at === undefined
+        ? current.submitted_at
+        : payload.submitted_at === null
+          ? null
+          : Number(payload.submitted_at),
+    review_channel_id:
+      payload.review_channel_id === undefined ? current.review_channel_id : payload.review_channel_id,
+    review_message_id:
+      payload.review_message_id === undefined ? current.review_message_id : payload.review_message_id,
+    updated_at: Date.now()
+  });
+
+  return getFormResponse(id);
+}
+
+function listRecentFormResponsesByGuild(guildId, limit = 25) {
+  return listRecentFormResponsesByGuildStmt
+    .all(String(guildId || ""), Number(limit || 25))
+    .map(normalizeFormResponseRow);
+}
+
+function expireDueFormResponses(now = Date.now()) {
+  const rows = listDueExpiredFormResponsesStmt.all(Number(now));
+  const tx = db.transaction(items => {
+    for (const row of items) {
+      updateFormResponseStmt.run({
+        id: Number(row.id),
+        status: "expired",
+        answers_json: row.answers_json,
+        current_question_index: Number(row.current_question_index || 0),
+        expires_at: row.expires_at ? Number(row.expires_at) : null,
+        submitted_at: row.submitted_at ? Number(row.submitted_at) : null,
+        review_channel_id: row.review_channel_id || null,
+        review_message_id: row.review_message_id || null,
+        updated_at: Number(now)
+      });
+    }
+  });
+  tx(rows);
+  return rows.map(row => getFormResponse(row.id)).filter(Boolean);
+}
+
 // ---------- EXPORTS ----------
 
 module.exports = {
@@ -2455,6 +2838,19 @@ module.exports = {
   getLatestApplicationSubmissionForUserType,
   listRecentApplicationSubmissionsByGuild,
   expireDueApplicationSubmissions,
+  createFormConfig,
+  getFormConfigById,
+  getFormConfigByKey,
+  listFormConfigsByGuild,
+  listPublishedFormConfigs,
+  updateFormConfig,
+  deleteFormConfig,
+  createFormResponse,
+  getFormResponse,
+  getActiveFormResponseForUser,
+  updateFormResponse,
+  listRecentFormResponsesByGuild,
+  expireDueFormResponses,
 
   // fortnite links
   getFortniteLink,

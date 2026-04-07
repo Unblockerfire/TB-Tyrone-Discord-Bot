@@ -31,6 +31,7 @@ const requests = require("./commands/requests");
 const staffPanels = require("./commands/staffPanels");
 const communityPosts = require("./commands/communityPosts");
 const applications = require("./commands/applications");
+const forms = require("./commands/forms");
 const { slashCommandRouteMap } = require("./slashCommandRoutes");
 
 const MEE6_BOT_ID = "159985870458322944";
@@ -57,6 +58,7 @@ const slashCommandModules = {
   songs,
   communityPosts,
   applications,
+  forms,
   staffPanels,
   leaderboard,
   fortniteQueue,
@@ -460,6 +462,15 @@ client.once("clientReady", () => {
   }
 
   try {
+    if (forms && typeof forms.startFormTicker === "function") {
+      forms.startFormTicker(client, db);
+      console.log("[Forms] Expiry ticker started ✅");
+    }
+  } catch (err) {
+    console.error("[Forms] Failed to start expiry ticker:", err);
+  }
+
+  try {
     if (applications && typeof applications.startApplicationTicker === "function") {
       applications.startApplicationTicker(client, db);
       console.log("[Applications] Expiry ticker started ✅");
@@ -592,6 +603,12 @@ client.on("interactionCreate", async (interaction) => {
           : false;
       if (handledByApplications) return;
 
+      const handledByForms =
+        forms && typeof forms.handleButton === "function"
+          ? await forms.handleButton(interaction, { client, db })
+          : false;
+      if (handledByForms) return;
+
       const handledByTickets =
         tickets && typeof tickets.handleButton === "function"
           ? await tickets.handleButton(interaction, { client, db })
@@ -625,6 +642,12 @@ client.on("interactionCreate", async (interaction) => {
           ? await privateVc.handleSelectMenu(interaction, { client, db })
           : false;
       if (handledByPrivateVc) return;
+
+      const handledByForms =
+        forms && typeof forms.handleSelectMenu === "function"
+          ? await forms.handleSelectMenu(interaction, { client, db })
+          : false;
+      if (handledByForms) return;
 
       return;
     }
@@ -665,6 +688,12 @@ client.on("interactionCreate", async (interaction) => {
           ? await communityPosts.handleModalSubmit(interaction, { client, db })
           : false;
       if (handledByCommunity) return;
+
+      const handledByForms =
+        forms && typeof forms.handleModalSubmit === "function"
+          ? await forms.handleModalSubmit(interaction, { client, db })
+          : false;
+      if (handledByForms) return;
 
       return;
     }
