@@ -129,14 +129,6 @@ const slashCommands = [
     .addStringOption(option =>
       option.setName("title").setDescription("Form title").setRequired(true)
     )
-    .addIntegerOption(option =>
-      option
-        .setName("question_count")
-        .setDescription("How many questions this form should have")
-        .setRequired(true)
-        .setMinValue(1)
-        .setMaxValue(20)
-    )
     .addChannelOption(option =>
       option
         .setName("channel")

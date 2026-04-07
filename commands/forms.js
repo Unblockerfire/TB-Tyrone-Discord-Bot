@@ -22,6 +22,8 @@ const FORM_TICK_MS = 60 * 1000;
 const CREATE_FORM_COMMAND = "create-form";
 const ADD_QUESTION_PREFIX = "form:editor:add:";
 const REMOVE_SELECT_PREFIX = "form:editor:remove_select:";
+const PREVIEW_PREFIX = "form:editor:preview:";
+const BACK_TO_EDITOR_PREFIX = "form:editor:back:";
 const PUBLISH_PREFIX = "form:editor:publish:";
 const DELETE_PREFIX = "form:editor:delete:";
 const REFRESH_EDITOR_PREFIX = "form:editor:refresh:";
@@ -146,7 +148,6 @@ function buildFormEditorEmbed(form) {
     .setColor(form.status === "published" ? 0x2ecc71 : 0x5865f2)
     .setDescription(
       `Status: **${form.status}**\n` +
-      `Target questions: **${form.target_question_count}**\n` +
       `Current questions: **${form.questions.length}**\n` +
       `Post channel: ${form.post_channel_id ? `<#${form.post_channel_id}>` : "Not set"}\n` +
       `Review channel: ${form.review_channel_id ? `<#${form.review_channel_id}>` : `<#${FORM_REVIEW_CHANNEL_ID}>`}`
@@ -158,8 +159,8 @@ function buildFormEditorEmbed(form) {
 }
 
 function buildFormEditorComponents(form) {
-  const canAddMore = (form.questions || []).length < Number(form.target_question_count || 1);
-  const canPublish = Boolean(form.post_channel_id) && (form.questions || []).length === Number(form.target_question_count || 1);
+  const canAddMore = (form.questions || []).length < 20;
+  const canPreview = Boolean(form.post_channel_id) && (form.questions || []).length >= 1;
 
   const rows = [
     new ActionRowBuilder().addComponents(
@@ -169,10 +170,10 @@ function buildFormEditorComponents(form) {
         .setStyle(ButtonStyle.Primary)
         .setDisabled(!canAddMore),
       new ButtonBuilder()
-        .setCustomId(`${PUBLISH_PREFIX}${form.id}`)
-        .setLabel(form.status === "published" ? "Re-publish Form" : "Publish Form")
+        .setCustomId(`${PREVIEW_PREFIX}${form.id}`)
+        .setLabel("Preview")
         .setStyle(ButtonStyle.Success)
-        .setDisabled(!canPublish),
+        .setDisabled(!canPreview),
       new ButtonBuilder()
         .setCustomId(`${REFRESH_EDITOR_PREFIX}${form.id}`)
         .setLabel("Refresh")
@@ -202,6 +203,52 @@ function buildFormEditorComponents(form) {
   }
 
   return rows;
+}
+
+function buildFormPreviewEmbeds(form) {
+  const questionSummary = (form.questions || [])
+    .map((question, index) => {
+      const options =
+        question.options?.length
+          ? `\nOptions: ${question.options.map(option => `• ${option}`).join(" ")}`
+          : "";
+      return `${index + 1}. **${question.label}**\n${renderQuestionType(question.type)} • ${question.required ? "Required" : "Optional"}${options}`;
+    })
+    .join("\n\n");
+
+  return [
+    new EmbedBuilder()
+      .setTitle(`Preview • ${form.title}`)
+      .setColor(0x1f6f63)
+      .setDescription(
+        "This is what users will see before they start filling out the form.\n\n" +
+        `Post channel: ${form.post_channel_id ? `<#${form.post_channel_id}>` : "Not set"}`
+      ),
+    new EmbedBuilder()
+      .setTitle("Question Preview")
+      .setColor(0x34495e)
+      .setDescription(questionSummary || "No questions yet.")
+  ];
+}
+
+function buildFormPreviewComponents(form) {
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`${BACK_TO_EDITOR_PREFIX}${form.id}`)
+        .setLabel("Back to Editor")
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(`${PUBLISH_PREFIX}${form.id}`)
+        .setLabel(form.status === "published" ? "Re-publish Form" : "Publish Form")
+        .setStyle(ButtonStyle.Success)
+        .setDisabled(!form.post_channel_id || !(form.questions || []).length),
+      new ButtonBuilder()
+        .setCustomId(`${DELETE_PREFIX}${form.id}`)
+        .setLabel("Delete Draft")
+        .setStyle(ButtonStyle.Danger)
+    )
+  ];
 }
 
 function buildAddQuestionModal(formId) {
@@ -455,6 +502,34 @@ async function renderEditorReply(interaction, db, formId, content = null) {
   }
 }
 
+async function renderPreviewReply(interaction, db, formId, content = null) {
+  const form = db.getFormConfigById(formId);
+  if (!form) {
+    const payload = { content: "That form no longer exists.", flags: MessageFlags.Ephemeral };
+    if (interaction.deferred || interaction.replied) return interaction.editReply(payload);
+    return interaction.reply(payload);
+  }
+
+  const payload = {
+    content: content || undefined,
+    embeds: buildFormPreviewEmbeds(form),
+    components: buildFormPreviewComponents(form),
+    flags: MessageFlags.Ephemeral
+  };
+
+  if (interaction.deferred || interaction.replied) {
+    await interaction.editReply(payload);
+  } else if (interaction.isButton?.() || interaction.isStringSelectMenu?.()) {
+    await interaction.update({
+      content: payload.content || null,
+      embeds: payload.embeds,
+      components: payload.components
+    });
+  } else {
+    await interaction.reply(payload);
+  }
+}
+
 async function postOrRefreshFormPanel(client, db, form, { reason = "manual_publish" } = {}) {
   const channel = await client.channels.fetch(form.post_channel_id).catch(() => null);
   if (!channel?.isTextBased()) {
@@ -653,11 +728,10 @@ async function handleInteraction(interaction, { db } = {}) {
   }
 
   const title = String(interaction.options.getString("title") || "").trim();
-  const targetQuestionCount = interaction.options.getInteger("question_count");
   const channel = interaction.options.getChannel("channel");
 
-  if (!title || !targetQuestionCount || !channel?.isTextBased?.()) {
-    await interaction.reply({ content: "I need a valid title, question count, and post channel.", flags: MessageFlags.Ephemeral });
+  if (!title || !channel?.isTextBased?.()) {
+    await interaction.reply({ content: "I need a valid title and post channel.", flags: MessageFlags.Ephemeral });
     return true;
   }
 
@@ -666,7 +740,7 @@ async function handleInteraction(interaction, { db } = {}) {
     key,
     guild_id: interaction.guildId,
     title,
-    target_question_count: targetQuestionCount,
+    target_question_count: 20,
     questions: [],
     post_channel_id: channel.id,
     review_channel_id: FORM_REVIEW_CHANNEL_ID,
@@ -686,7 +760,7 @@ async function handleInteraction(interaction, { db } = {}) {
   );
 
   await interaction.reply({
-    content: "Form draft created. Build the questions below, then publish it when it’s ready.",
+    content: "Form draft created. Add your questions, then open Preview when you want to publish it.",
     embeds: [buildFormEditorEmbed(form)],
     components: buildFormEditorComponents(form),
     flags: MessageFlags.Ephemeral
@@ -706,11 +780,37 @@ async function handleButton(interaction, { client, db } = {}) {
       await interaction.reply({ content: "You cannot edit that form.", flags: MessageFlags.Ephemeral });
       return true;
     }
-    if ((form.questions || []).length >= form.target_question_count) {
-      await interaction.reply({ content: "That form already has the target number of questions.", flags: MessageFlags.Ephemeral });
+    if ((form.questions || []).length >= 20) {
+      await interaction.reply({ content: "That form already has the max of 20 questions.", flags: MessageFlags.Ephemeral });
       return true;
     }
     await interaction.showModal(buildAddQuestionModal(formId));
+    return true;
+  }
+
+  if (customId.startsWith(PREVIEW_PREFIX)) {
+    const formId = Number(customId.slice(PREVIEW_PREFIX.length));
+    const form = db.getFormConfigById(formId);
+    if (!form || !isFormManager(interaction.member)) {
+      await interaction.reply({ content: "You cannot preview that form.", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+    if (!(form.questions || []).length) {
+      await interaction.reply({ content: "Add at least one question before previewing.", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+    await renderPreviewReply(interaction, db, form.id);
+    return true;
+  }
+
+  if (customId.startsWith(BACK_TO_EDITOR_PREFIX)) {
+    const formId = Number(customId.slice(BACK_TO_EDITOR_PREFIX.length));
+    const form = db.getFormConfigById(formId);
+    if (!form || !isFormManager(interaction.member)) {
+      await interaction.reply({ content: "You cannot edit that form.", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+    await renderEditorReply(interaction, db, form.id);
     return true;
   }
 
@@ -721,18 +821,15 @@ async function handleButton(interaction, { client, db } = {}) {
       await interaction.reply({ content: "You cannot publish that form.", flags: MessageFlags.Ephemeral });
       return true;
     }
-    if ((form.questions || []).length !== form.target_question_count) {
-      await interaction.reply({
-        content: `Finish all ${form.target_question_count} questions before publishing.`,
-        flags: MessageFlags.Ephemeral
-      });
+    if (!(form.questions || []).length) {
+      await interaction.reply({ content: "Add at least one question before publishing.", flags: MessageFlags.Ephemeral });
       return true;
     }
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     try {
       const updated = await postOrRefreshFormPanel(client, db, form, { reason: "manual_publish" });
-      await renderEditorReply(interaction, db, updated.id, `Form published in <#${updated.post_channel_id}> ✅`);
+      await renderPreviewReply(interaction, db, updated.id, `Form published in <#${updated.post_channel_id}> ✅`);
     } catch (error) {
       console.error("[Forms] Publish failed:", error);
       await interaction.editReply({ content: "I could not publish that form.", embeds: [], components: [] });
