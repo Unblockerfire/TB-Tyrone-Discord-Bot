@@ -124,6 +124,35 @@ function canRunLeaderboardCommand(member, commandName) {
   );
 }
 
+function isLeaderboardDisplayMessage(message, botUserId) {
+  if (!message) return false;
+  if (botUserId && message.author?.id !== botUserId) return false;
+  return message.embeds?.some(embed => embed.title === "🏆 Live Stream Leaderboard") || false;
+}
+
+function isLeaderboardSetupMessage(message, botUserId) {
+  if (!message) return false;
+  if (botUserId && message.author?.id !== botUserId) return false;
+  return message.embeds?.some(embed => embed.title === "🛠 Leaderboard Control Panel") || false;
+}
+
+async function deleteDuplicateLeaderboardMessages(channel, currentMessageId, matcher, botUserId) {
+  if (!channel?.isTextBased?.()) return 0;
+
+  let deleted = 0;
+  const recentMessages = await channel.messages.fetch({ limit: 25 }).catch(() => null);
+  if (!recentMessages) return 0;
+
+  for (const message of recentMessages.values()) {
+    if (currentMessageId && message.id === currentMessageId) continue;
+    if (!matcher(message, botUserId)) continue;
+    await message.delete().catch(() => null);
+    deleted += 1;
+  }
+
+  return deleted;
+}
+
 // ---------- EMBEDS ----------
 function buildDisplayEmbed(entries) {
   const sorted = sortEntries(entries).slice(0, 10);
@@ -210,6 +239,12 @@ async function syncLeaderboard(guild) {
   if (setupMsg) {
     await setupMsg.edit({ embeds: [setupEmbed] });
   } else {
+    await deleteDuplicateLeaderboardMessages(
+      setupChannel,
+      null,
+      isLeaderboardSetupMessage,
+      guild.client.user?.id
+    );
     setupMsg = await setupChannel.send({ embeds: [setupEmbed] });
     data.setupMessageId = setupMsg.id;
   }
@@ -222,11 +257,40 @@ async function syncLeaderboard(guild) {
   if (displayMsg) {
     await displayMsg.edit({ embeds: [displayEmbed] });
   } else {
+    await deleteDuplicateLeaderboardMessages(
+      displayChannel,
+      null,
+      isLeaderboardDisplayMessage,
+      guild.client.user?.id
+    );
     displayMsg = await displayChannel.send({ embeds: [displayEmbed] });
     data.displayMessageId = displayMsg.id;
   }
 
+  const deletedSetupDuplicates = await deleteDuplicateLeaderboardMessages(
+    setupChannel,
+    setupMsg?.id || null,
+    isLeaderboardSetupMessage,
+    guild.client.user?.id
+  );
+  const deletedDisplayDuplicates = await deleteDuplicateLeaderboardMessages(
+    displayChannel,
+    displayMsg?.id || null,
+    isLeaderboardDisplayMessage,
+    guild.client.user?.id
+  );
+
   saveData(data);
+  console.log(
+    "[Leaderboard] Sync complete",
+    JSON.stringify({
+      setup_message_id: data.setupMessageId,
+      display_message_id: data.displayMessageId,
+      deleted_setup_duplicates: deletedSetupDuplicates,
+      deleted_display_duplicates: deletedDisplayDuplicates,
+      entry_count: data.entries.length
+    })
+  );
 }
 
 // ---------- COMMAND HANDLER ----------
