@@ -1,8 +1,47 @@
 // db.js
+const fs = require("fs");
+const path = require("path");
 const Database = require("better-sqlite3");
 
+function resolveDatabasePath() {
+  const configured = process.env.DATABASE_URL || process.env.SQLITE_PATH || "";
+  if (configured.startsWith("file:")) {
+    try {
+      return decodeURIComponent(new URL(configured).pathname);
+    } catch (err) {
+      console.error("[DB] Invalid DATABASE_URL, falling back to local tbsbot.db:", err);
+    }
+  }
+
+  if (configured && !configured.includes("://")) return configured;
+  return path.join(process.cwd(), "tbsbot.db");
+}
+
+const databasePath = resolveDatabasePath();
+const legacyDatabasePath = path.join(process.cwd(), "tbsbot.db");
+
+try {
+  const databaseDir = path.dirname(databasePath);
+  if (databaseDir && databaseDir !== ".") fs.mkdirSync(databaseDir, { recursive: true });
+
+  if (
+    path.resolve(databasePath) !== path.resolve(legacyDatabasePath) &&
+    !fs.existsSync(databasePath) &&
+    fs.existsSync(legacyDatabasePath)
+  ) {
+    fs.copyFileSync(legacyDatabasePath, databasePath);
+    console.log("[DB] Migrated legacy SQLite database", JSON.stringify({
+      from: legacyDatabasePath,
+      to: databasePath
+    }));
+  }
+} catch (err) {
+  console.error("[DB] Failed to prepare database path:", err);
+}
+
 // Create / open the database file
-const db = new Database("tbsbot.db");
+const db = new Database(databasePath);
+console.log("[DB] SQLite open", JSON.stringify({ path: databasePath }));
 
 // ---------- TABLE SETUP ----------
 
@@ -73,6 +112,63 @@ db.prepare(`
     value TEXT NOT NULL,
     updated_at INTEGER NOT NULL
   )
+`).run();
+
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS leaderboard_entries (
+    user_id TEXT PRIMARY KEY,
+    coins INTEGER NOT NULL DEFAULT 0,
+    likes INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL
+  )
+`).run();
+
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS chat_level_profiles (
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    message_count INTEGER NOT NULL DEFAULT 0,
+    xp_total REAL NOT NULL DEFAULT 0,
+    active_boost_count INTEGER NOT NULL DEFAULT 0,
+    boost_tier INTEGER NOT NULL DEFAULT 0,
+    xp_multiplier REAL NOT NULL DEFAULT 1,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (guild_id, user_id)
+  )
+`).run();
+
+try {
+  db.prepare(`
+    ALTER TABLE chat_level_profiles
+    ADD COLUMN xp_total REAL NOT NULL DEFAULT 0
+  `).run();
+} catch (err) {
+  if (!String(err.message).includes("duplicate column name")) {
+    console.error("[DB] Error while ensuring chat_level_profiles.xp_total exists:", err);
+  }
+}
+
+for (const column of [
+  ["active_boost_count", "INTEGER NOT NULL DEFAULT 0"],
+  ["boost_tier", "INTEGER NOT NULL DEFAULT 0"],
+  ["xp_multiplier", "REAL NOT NULL DEFAULT 1"]
+]) {
+  try {
+    db.prepare(`
+      ALTER TABLE chat_level_profiles
+      ADD COLUMN ${column[0]} ${column[1]}
+    `).run();
+  } catch (err) {
+    if (!String(err.message).includes("duplicate column name")) {
+      console.error(`[DB] Error while ensuring chat_level_profiles.${column[0]} exists:`, err);
+    }
+  }
+}
+
+db.prepare(`
+  UPDATE chat_level_profiles
+  SET xp_total = message_count
+  WHERE xp_total = 0 AND message_count > 0
 `).run();
 
 db.prepare(`
@@ -505,6 +601,127 @@ const upsertAppSettingStmt = db.prepare(`
   VALUES (@key, @value, @updated_at)
   ON CONFLICT(key) DO UPDATE SET
     value = excluded.value,
+    updated_at = excluded.updated_at
+`);
+
+const listLeaderboardEntriesStmt = db.prepare(`
+  SELECT user_id, coins, likes, updated_at
+  FROM leaderboard_entries
+  ORDER BY coins DESC, likes DESC, user_id ASC
+`);
+
+const getLeaderboardEntryStmt = db.prepare(`
+  SELECT user_id, coins, likes, updated_at
+  FROM leaderboard_entries
+  WHERE user_id = ?
+`);
+
+const upsertLeaderboardEntryStmt = db.prepare(`
+  INSERT INTO leaderboard_entries (user_id, coins, likes, updated_at)
+  VALUES (@user_id, @coins, @likes, @updated_at)
+  ON CONFLICT(user_id) DO UPDATE SET
+    coins = excluded.coins,
+    likes = excluded.likes,
+    updated_at = excluded.updated_at
+`);
+
+const deleteLeaderboardEntryStmt = db.prepare(`
+  DELETE FROM leaderboard_entries
+  WHERE user_id = ?
+`);
+
+const clearLeaderboardEntriesStmt = db.prepare(`
+  DELETE FROM leaderboard_entries
+`);
+
+const getChatLevelProfileStmt = db.prepare(`
+  SELECT guild_id, user_id, message_count, xp_total, active_boost_count, boost_tier, xp_multiplier, updated_at
+  FROM chat_level_profiles
+  WHERE guild_id = ? AND user_id = ?
+`);
+
+const listChatLevelProfilesByGuildStmt = db.prepare(`
+  SELECT guild_id, user_id, message_count, xp_total, active_boost_count, boost_tier, xp_multiplier, updated_at
+  FROM chat_level_profiles
+  WHERE guild_id = ?
+  ORDER BY xp_total DESC, message_count DESC, updated_at DESC, user_id ASC
+`);
+
+const listTopChatLevelProfilesByGuildStmt = db.prepare(`
+  SELECT guild_id, user_id, message_count, xp_total, active_boost_count, boost_tier, xp_multiplier, updated_at
+  FROM chat_level_profiles
+  WHERE guild_id = ? AND xp_total > 0
+  ORDER BY xp_total DESC, message_count DESC, updated_at DESC, user_id ASC
+  LIMIT ?
+`);
+
+const upsertChatLevelProfileStmt = db.prepare(`
+  INSERT INTO chat_level_profiles (
+    guild_id,
+    user_id,
+    message_count,
+    xp_total,
+    active_boost_count,
+    boost_tier,
+    xp_multiplier,
+    updated_at
+  )
+  VALUES (
+    @guild_id,
+    @user_id,
+    @message_count,
+    @xp_total,
+    @active_boost_count,
+    @boost_tier,
+    @xp_multiplier,
+    @updated_at
+  )
+  ON CONFLICT(guild_id, user_id) DO UPDATE SET
+    message_count = excluded.message_count,
+    xp_total = excluded.xp_total,
+    active_boost_count = excluded.active_boost_count,
+    boost_tier = excluded.boost_tier,
+    xp_multiplier = excluded.xp_multiplier,
+    updated_at = excluded.updated_at
+`);
+
+const incrementChatLevelProfileStmt = db.prepare(`
+  INSERT INTO chat_level_profiles (
+    guild_id,
+    user_id,
+    message_count,
+    xp_total,
+    active_boost_count,
+    boost_tier,
+    xp_multiplier,
+    updated_at
+  )
+  VALUES (?, ?, 1, ?, ?, ?, ?, ?)
+  ON CONFLICT(guild_id, user_id) DO UPDATE SET
+    message_count = chat_level_profiles.message_count + 1,
+    xp_total = chat_level_profiles.xp_total + excluded.xp_total,
+    active_boost_count = excluded.active_boost_count,
+    boost_tier = excluded.boost_tier,
+    xp_multiplier = excluded.xp_multiplier,
+    updated_at = excluded.updated_at
+`);
+
+const updateChatLevelBoostStateStmt = db.prepare(`
+  INSERT INTO chat_level_profiles (
+    guild_id,
+    user_id,
+    message_count,
+    xp_total,
+    active_boost_count,
+    boost_tier,
+    xp_multiplier,
+    updated_at
+  )
+  VALUES (?, ?, 0, 0, ?, ?, ?, ?)
+  ON CONFLICT(guild_id, user_id) DO UPDATE SET
+    active_boost_count = excluded.active_boost_count,
+    boost_tier = excluded.boost_tier,
+    xp_multiplier = excluded.xp_multiplier,
     updated_at = excluded.updated_at
 `);
 
@@ -1249,6 +1466,182 @@ function setManyAppSettings(entries) {
 
   tx(entries);
   return listAppSettings();
+}
+
+function normalizeLeaderboardEntryRow(row) {
+  if (!row) return null;
+  return {
+    userId: String(row.user_id),
+    coins: Number(row.coins || 0),
+    likes: Number(row.likes || 0),
+    updatedAt: Number(row.updated_at || 0)
+  };
+}
+
+function listLeaderboardEntries() {
+  return listLeaderboardEntriesStmt
+    .all()
+    .map(normalizeLeaderboardEntryRow);
+}
+
+function getLeaderboardEntry(userId) {
+  return normalizeLeaderboardEntryRow(getLeaderboardEntryStmt.get(String(userId)));
+}
+
+function upsertLeaderboardEntry(entry) {
+  const userId = String(entry?.userId || entry?.user_id || "");
+  if (!userId) return null;
+
+  const coins = Math.max(0, Math.trunc(Number(entry?.coins || 0)));
+  const likes = Math.max(0, Math.trunc(Number(entry?.likes || 0)));
+
+  if (coins === 0 && likes === 0) {
+    deleteLeaderboardEntryStmt.run(userId);
+    return null;
+  }
+
+  upsertLeaderboardEntryStmt.run({
+    user_id: userId,
+    coins,
+    likes,
+    updated_at: Date.now()
+  });
+
+  return getLeaderboardEntry(userId);
+}
+
+function deleteLeaderboardEntry(userId) {
+  return deleteLeaderboardEntryStmt.run(String(userId));
+}
+
+function clearLeaderboardEntries() {
+  return clearLeaderboardEntriesStmt.run();
+}
+
+function importLeaderboardEntries(entries = []) {
+  if (!Array.isArray(entries)) return 0;
+
+  const tx = db.transaction(items => {
+    for (const item of items) {
+      const userId = String(item?.userId || item?.user_id || "");
+      if (!userId) continue;
+
+      const coins = Math.max(0, Math.trunc(Number(item?.coins || 0)));
+      const likes = Math.max(0, Math.trunc(Number(item?.likes || 0)));
+      if (coins === 0 && likes === 0) continue;
+
+      upsertLeaderboardEntryStmt.run({
+        user_id: userId,
+        coins,
+        likes,
+        updated_at: Date.now()
+      });
+    }
+  });
+
+  tx(entries);
+  return listLeaderboardEntries().length;
+}
+
+function replaceLeaderboardEntries(entries = []) {
+  if (!Array.isArray(entries)) return listLeaderboardEntries();
+
+  const tx = db.transaction(items => {
+    clearLeaderboardEntriesStmt.run();
+
+    for (const item of items) {
+      const userId = String(item?.userId || item?.user_id || "");
+      if (!userId) continue;
+
+      const coins = Math.max(0, Math.trunc(Number(item?.coins || 0)));
+      const likes = Math.max(0, Math.trunc(Number(item?.likes || 0)));
+      if (coins === 0 && likes === 0) continue;
+
+      upsertLeaderboardEntryStmt.run({
+        user_id: userId,
+        coins,
+        likes,
+        updated_at: Date.now()
+      });
+    }
+  });
+
+  tx(entries);
+  return listLeaderboardEntries();
+}
+
+function normalizeChatLevelProfileRow(row) {
+  if (!row) return null;
+  return {
+    guild_id: String(row.guild_id),
+    user_id: String(row.user_id),
+    message_count: Number(row.message_count || 0),
+    xp_total: Number(row.xp_total || 0),
+    active_boost_count: Number(row.active_boost_count || 0),
+    boost_tier: Number(row.boost_tier || 0),
+    xp_multiplier: Number(row.xp_multiplier || 1),
+    updated_at: Number(row.updated_at || 0)
+  };
+}
+
+function getChatLevelProfile(guildId, userId) {
+  return normalizeChatLevelProfileRow(
+    getChatLevelProfileStmt.get(String(guildId), String(userId))
+  );
+}
+
+function listChatLevelProfilesByGuild(guildId) {
+  return listChatLevelProfilesByGuildStmt
+    .all(String(guildId))
+    .map(normalizeChatLevelProfileRow);
+}
+
+function listTopChatLevelProfilesByGuild(guildId, limit = 10) {
+  return listTopChatLevelProfilesByGuildStmt
+    .all(String(guildId), Math.max(1, Number(limit || 10)))
+    .map(normalizeChatLevelProfileRow);
+}
+
+function setChatLevelProfile(guildId, userId, messageCount, xpTotal = messageCount, boostState = {}) {
+  const now = Date.now();
+  upsertChatLevelProfileStmt.run({
+    guild_id: String(guildId),
+    user_id: String(userId),
+    message_count: Math.max(0, Number(messageCount || 0)),
+    xp_total: Math.max(0, Number(xpTotal || 0)),
+    active_boost_count: Math.max(0, Number(boostState.activeBoostCount || 0)),
+    boost_tier: Math.max(0, Number(boostState.boostTier || 0)),
+    xp_multiplier: Number(boostState.xpMultiplier || 1),
+    updated_at: now
+  });
+  return getChatLevelProfile(guildId, userId);
+}
+
+function incrementChatLevelProfile(guildId, userId, xpAward = 1, boostState = {}) {
+  const now = Date.now();
+  incrementChatLevelProfileStmt.run(
+    String(guildId),
+    String(userId),
+    Math.max(0, Number(xpAward || 0)),
+    Math.max(0, Number(boostState.activeBoostCount || 0)),
+    Math.max(0, Number(boostState.boostTier || 0)),
+    Number(boostState.xpMultiplier || 1),
+    now
+  );
+  return getChatLevelProfile(guildId, userId);
+}
+
+function updateChatLevelBoostState(guildId, userId, boostState = {}) {
+  const now = Date.now();
+  updateChatLevelBoostStateStmt.run(
+    String(guildId),
+    String(userId),
+    Math.max(0, Number(boostState.activeBoostCount || 0)),
+    Math.max(0, Number(boostState.boostTier || 0)),
+    Number(boostState.xpMultiplier || 1),
+    now
+  );
+  return getChatLevelProfile(guildId, userId);
 }
 
 function listTyroneFaq() {
@@ -2792,6 +3185,19 @@ module.exports = {
   listAppSettings,
   setAppSetting,
   setManyAppSettings,
+  listLeaderboardEntries,
+  getLeaderboardEntry,
+  upsertLeaderboardEntry,
+  deleteLeaderboardEntry,
+  clearLeaderboardEntries,
+  importLeaderboardEntries,
+  replaceLeaderboardEntries,
+  getChatLevelProfile,
+  listChatLevelProfilesByGuild,
+  listTopChatLevelProfilesByGuild,
+  setChatLevelProfile,
+  incrementChatLevelProfile,
+  updateChatLevelBoostState,
   listTyroneFaq,
   getTyroneFaqById,
   createTyroneFaq,

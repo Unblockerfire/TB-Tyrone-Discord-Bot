@@ -86,6 +86,26 @@ const slashCommands = [
     .setDescription("Post the Get Support ticket button panel (admin/owner only)"),
 
   new SlashCommandBuilder()
+    .setName("summarize-ticket")
+    .setDescription("Summarize the current ticket channel for staff"),
+
+  new SlashCommandBuilder()
+    .setName("ticket-save-solution")
+    .setDescription("Save the current ticket's solution to Tyrone's knowledge base")
+    .addStringOption(option =>
+      option
+        .setName("solution")
+        .setDescription("The solution Tyrone should reuse next time")
+        .setRequired(true)
+    )
+    .addStringOption(option =>
+      option
+        .setName("category")
+        .setDescription("Optional category label for the saved solution")
+        .setRequired(false)
+    ),
+
+  new SlashCommandBuilder()
     .setName("setup-applacation")
     .setDescription("Post the Tyrone application panel"),
 
@@ -158,8 +178,16 @@ const slashCommands = [
     .setDescription("Post the Announcements role button panel (owner/admin)"),
 
   new SlashCommandBuilder()
-    .setName("setup-party")
-    .setDescription("Post the Party Member role button panel (owner/admin)"),
+    .setName("role-select1")
+    .setDescription("Post the Fortnite servers role panel in the role-select channel"),
+
+  new SlashCommandBuilder()
+    .setName("role-select2")
+    .setDescription("Post the Fortnite player type role panel in the role-select channel"),
+
+  new SlashCommandBuilder()
+    .setName("setup-notis")
+    .setDescription("Post the notification role panel"),
 
   new SlashCommandBuilder()
     .setName("setup-notify-all")
@@ -322,6 +350,28 @@ const slashCommands = [
   new SlashCommandBuilder()
     .setName("leaderboard-update")
     .setDescription("Force refresh the leaderboard post (owner only)"),
+
+  new SlashCommandBuilder()
+    .setName("leaderboard-sync-roles")
+    .setDescription("Sync the leaderboard rank roles to the current standings"),
+
+  new SlashCommandBuilder()
+    .setName("sync-level-roles")
+    .setDescription("Sync chat level roles for one user or everyone")
+    .addUserOption(option =>
+      option
+        .setName("user")
+        .setDescription("Optional user to sync. Leave blank to sync everyone.")
+        .setRequired(false)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("setup-ranks")
+    .setDescription("Create or refresh the XP ranks leaderboard"),
+
+  new SlashCommandBuilder()
+    .setName("ranks-refresh")
+    .setDescription("Force refresh the XP ranks leaderboard"),
 
   new SlashCommandBuilder()
     .setName("setup-fort-verify-panel")

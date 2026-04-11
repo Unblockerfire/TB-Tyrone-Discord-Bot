@@ -6,7 +6,8 @@ const COMMAND_GROUPS = [
     commands: [
       { usage: "!tyrone <question>", detail: "Ask Tyrone directly." },
       { usage: "!tyrone-approve", detail: "Approve Tyrone's queued reply in the same channel." },
-      { usage: "!tytest", detail: "Quick Tyrone test command." }
+      { usage: "!tytest", detail: "Quick Tyrone test command." },
+      { usage: "!ranks [@user]", detail: "View your XP rank, level, boosts, and XP bonus." }
     ]
   },
   {

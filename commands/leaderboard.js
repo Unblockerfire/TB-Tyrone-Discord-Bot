@@ -1,17 +1,33 @@
 // commands/leaderboard.js
 const fs = require("fs");
 const path = require("path");
-const { EmbedBuilder } = require("discord.js");
+const { EmbedBuilder, MessageFlags, PermissionsBitField } = require("discord.js");
 
 // ---------- CONFIG ----------
 const SETUP_CHANNEL_ID = "1479295934646059069";
 const DISPLAY_CHANNEL_ID = "1478919882463772846";
 const OWNER_ROLE_ID = "1113158001604427966";
+const HEAD_ADMIN_ROLE_ID = process.env.ADMIN_ROLE_ID || "";
 const LEADERBOARD_MANAGER_ROLE_ID = "1113090317592309800";
+
+const COIN_RANK_ROLE_IDS = {
+  1: "1491999232259788870",
+  2: "1491999293953802270",
+  3: "1491999359913689109"
+};
+
+const LIKE_RANK_ROLE_IDS = {
+  1: "1491998984674345032",
+  2: "1491999068707360850",
+  3: "1491999128148905984"
+};
 
 const DATA_PATH = path.join(__dirname, "..", "leaderboard-data.json");
 const DATA_BACKUP_PATH = path.join(__dirname, "..", "leaderboard-data.backup.json");
 const DATA_TEMP_PATH = path.join(__dirname, "..", "leaderboard-data.tmp.json");
+const SETUP_MESSAGE_SETTING_KEY = "leaderboard.setup_message_id";
+const DISPLAY_MESSAGE_SETTING_KEY = "leaderboard.display_message_id";
+const LEGACY_JSON_IMPORT_SETTING_KEY = "leaderboard.legacy_json_imported_at";
 
 function normalizeDataShape(parsed = {}) {
   return {
@@ -31,7 +47,7 @@ function tryReadData(filePath) {
 }
 
 // ---------- DATA ----------
-function loadData() {
+function loadJsonData() {
   const primary = tryReadData(DATA_PATH);
   if (primary) return primary;
 
@@ -46,8 +62,53 @@ function loadData() {
   return { setupMessageId: null, displayMessageId: null, entries: [] };
 }
 
-function saveData(data) {
+function loadData(dbStore = null) {
+  if (dbStore?.listLeaderboardEntries && dbStore?.getAppSetting) {
+    const legacyImported = dbStore.getAppSetting(LEGACY_JSON_IMPORT_SETTING_KEY);
+    let entries = dbStore.listLeaderboardEntries();
+
+    if (!legacyImported) {
+      const legacy = loadJsonData();
+      if (legacy.entries.length && dbStore.importLeaderboardEntries) {
+        const importedCount = dbStore.importLeaderboardEntries(legacy.entries);
+        console.log(
+          "[Leaderboard] Imported legacy JSON entries into SQLite",
+          JSON.stringify({ imported_count: importedCount })
+        );
+        entries = dbStore.listLeaderboardEntries();
+      }
+
+      if (legacy.setupMessageId && !dbStore.getAppSetting(SETUP_MESSAGE_SETTING_KEY)) {
+        dbStore.setAppSetting(SETUP_MESSAGE_SETTING_KEY, legacy.setupMessageId);
+      }
+
+      if (legacy.displayMessageId && !dbStore.getAppSetting(DISPLAY_MESSAGE_SETTING_KEY)) {
+        dbStore.setAppSetting(DISPLAY_MESSAGE_SETTING_KEY, legacy.displayMessageId);
+      }
+
+      dbStore.setAppSetting(LEGACY_JSON_IMPORT_SETTING_KEY, String(Date.now()));
+    }
+
+    return {
+      setupMessageId: dbStore.getAppSetting(SETUP_MESSAGE_SETTING_KEY)?.value || null,
+      displayMessageId: dbStore.getAppSetting(DISPLAY_MESSAGE_SETTING_KEY)?.value || null,
+      entries
+    };
+  }
+
+  return loadJsonData();
+}
+
+function saveData(data, dbStore = null) {
   const normalized = normalizeDataShape(data);
+
+  if (dbStore?.replaceLeaderboardEntries && dbStore?.setAppSetting) {
+    dbStore.replaceLeaderboardEntries(normalized.entries);
+    if (normalized.setupMessageId) dbStore.setAppSetting(SETUP_MESSAGE_SETTING_KEY, normalized.setupMessageId);
+    if (normalized.displayMessageId) dbStore.setAppSetting(DISPLAY_MESSAGE_SETTING_KEY, normalized.displayMessageId);
+    return;
+  }
+
   const payload = JSON.stringify(normalized, null, 2);
 
   if (fs.existsSync(DATA_PATH)) {
@@ -70,6 +131,21 @@ function sortEntries(entries) {
       return (b.likes || 0) - (a.likes || 0);
     }
 
+    return String(a.userId || "").localeCompare(String(b.userId || ""));
+  });
+}
+
+function sortEntriesByMetric(entries, metric) {
+  return [...entries].sort((a, b) => {
+    if ((b?.[metric] || 0) !== (a?.[metric] || 0)) {
+      return (b?.[metric] || 0) - (a?.[metric] || 0);
+    }
+    if ((b?.coins || 0) !== (a?.coins || 0)) {
+      return (b?.coins || 0) - (a?.coins || 0);
+    }
+    if ((b?.likes || 0) !== (a?.likes || 0)) {
+      return (b?.likes || 0) - (a?.likes || 0);
+    }
     return String(a.userId || "").localeCompare(String(b.userId || ""));
   });
 }
@@ -108,11 +184,14 @@ function formatNumber(value) {
 }
 
 function canManageLeaderboard(member) {
-  return !!member?.roles?.cache?.has(OWNER_ROLE_ID);
+  if (!member) return false;
+  if (member.permissions?.has?.(PermissionsBitField.Flags.Administrator)) return true;
+  if (member.permissions?.has?.(PermissionsBitField.Flags.ManageGuild)) return true;
+  return [OWNER_ROLE_ID, HEAD_ADMIN_ROLE_ID].filter(Boolean).some(roleId => member.roles?.cache?.has(roleId));
 }
 
 function canAddToLeaderboard(member) {
-  return !!member?.roles?.cache?.has(LEADERBOARD_MANAGER_ROLE_ID);
+  return canManageLeaderboard(member) || !!member?.roles?.cache?.has(LEADERBOARD_MANAGER_ROLE_ID);
 }
 
 function canRunLeaderboardCommand(member, commandName) {
@@ -151,6 +230,78 @@ async function deleteDuplicateLeaderboardMessages(channel, currentMessageId, mat
   }
 
   return deleted;
+}
+
+async function syncRankGroupRoles(guild, rankedEntries, roleIdMap, metricLabel) {
+  const roleAssignments = Object.entries(roleIdMap).map(([rank, roleId]) => ({
+    rank: Number(rank),
+    roleId,
+    targetUserId: rankedEntries[Number(rank) - 1]?.userId || null
+  }));
+
+  const allMembers = await guild.members.fetch().catch(() => null);
+  const guildMembers = allMembers ? [...allMembers.values()] : [];
+  const summary = [];
+
+  for (const assignment of roleAssignments) {
+    const role = guild.roles.cache.get(assignment.roleId);
+    if (!role) {
+      summary.push({ metric: metricLabel, rank: assignment.rank, role_missing: true, role_id: assignment.roleId });
+      continue;
+    }
+
+    let removed = 0;
+    let added = 0;
+
+    for (const member of guildMembers) {
+      if (!member.roles.cache.has(role.id)) continue;
+      if (assignment.targetUserId && member.id === assignment.targetUserId) continue;
+      if (!member.manageable) continue;
+      await member.roles.remove(role.id, `Leaderboard ${metricLabel} rank sync`).catch(() => null);
+      removed += 1;
+    }
+
+    if (assignment.targetUserId) {
+      const targetMember = guildMembers.find(member => member.id === assignment.targetUserId)
+        || await guild.members.fetch(assignment.targetUserId).catch(() => null);
+      if (targetMember && targetMember.manageable && !targetMember.roles.cache.has(role.id)) {
+        await targetMember.roles.add(role.id, `Leaderboard ${metricLabel} rank sync`).catch(() => null);
+        added += 1;
+      }
+    }
+
+    summary.push({
+      metric: metricLabel,
+      rank: assignment.rank,
+      role_id: assignment.roleId,
+      target_user_id: assignment.targetUserId,
+      added,
+      removed
+    });
+  }
+
+  return summary;
+}
+
+async function syncLeaderboardRankRoles(guild, entries) {
+  const coinRanking = sortEntriesByMetric(entries, "coins").filter(entry => Number(entry.coins || 0) > 0);
+  const likeRanking = sortEntriesByMetric(entries, "likes").filter(entry => Number(entry.likes || 0) > 0);
+
+  const coinSummary = await syncRankGroupRoles(guild, coinRanking, COIN_RANK_ROLE_IDS, "coins");
+  const likeSummary = await syncRankGroupRoles(guild, likeRanking, LIKE_RANK_ROLE_IDS, "likes");
+
+  console.log(
+    "[Leaderboard] Rank roles synced",
+    JSON.stringify({
+      coin_summary: coinSummary,
+      like_summary: likeSummary
+    })
+  );
+
+  return {
+    coinSummary,
+    likeSummary
+  };
 }
 
 // ---------- EMBEDS ----------
@@ -214,8 +365,8 @@ function buildSetupEmbed(entries) {
 }
 
 // ---------- SYNC ----------
-async function syncLeaderboard(guild) {
-  const data = loadData();
+async function syncLeaderboard(guild, dbStore = null) {
+  const data = loadData(dbStore);
 
   const setupChannel = await guild.channels.fetch(SETUP_CHANNEL_ID).catch(() => null);
   const displayChannel = await guild.channels.fetch(DISPLAY_CHANNEL_ID).catch(() => null);
@@ -280,7 +431,12 @@ async function syncLeaderboard(guild) {
     guild.client.user?.id
   );
 
-  saveData(data);
+  const rankRoleSync = await syncLeaderboardRankRoles(guild, data.entries).catch(error => {
+    console.error("[Leaderboard] Rank role sync failed:", error);
+    return null;
+  });
+
+  saveData(data, dbStore);
   console.log(
     "[Leaderboard] Sync complete",
     JSON.stringify({
@@ -288,13 +444,14 @@ async function syncLeaderboard(guild) {
       display_message_id: data.displayMessageId,
       deleted_setup_duplicates: deletedSetupDuplicates,
       deleted_display_duplicates: deletedDisplayDuplicates,
+      rank_role_sync_ok: !!rankRoleSync,
       entry_count: data.entries.length
     })
   );
 }
 
 // ---------- COMMAND HANDLER ----------
-async function handleInteraction(interaction) {
+async function handleInteraction(interaction, { db } = {}) {
   if (!interaction.isChatInputCommand()) return false;
 
   const cmd = interaction.commandName;
@@ -307,7 +464,8 @@ async function handleInteraction(interaction) {
     "leaderboard-add-likes",
     "leaderboard-set-likes",
     "leaderboard-reset",
-    "leaderboard-update"
+    "leaderboard-update",
+    "leaderboard-sync-roles"
   ].includes(cmd)) return false;
 
   if (!interaction.inGuild()) {
@@ -334,16 +492,15 @@ async function handleInteraction(interaction) {
     return true;
   }
 
-  const data = loadData();
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  const data = loadData(db);
 
   // setup
   if (cmd === "setup-leaderboard") {
-    await syncLeaderboard(interaction.guild);
+    await syncLeaderboard(interaction.guild, db);
 
-    await interaction.reply({
-      content: "Leaderboard control panel + public display are now linked.",
-      ephemeral: true
-    });
+    await interaction.editReply("Leaderboard control panel + public display are now linked.");
     return true;
   }
 
@@ -353,23 +510,17 @@ async function handleInteraction(interaction) {
     const coins = interaction.options.getInteger("coins");
 
     if (!user || !Number.isInteger(coins) || coins <= 0) {
-      await interaction.reply({
-        content: "Provide a valid user and a positive coin amount.",
-        ephemeral: true
-      });
+      await interaction.editReply("Provide a valid user and a positive coin amount.");
       return true;
     }
 
     const entry = ensureEntry(data.entries, user.id);
     entry.coins += coins;
 
-    saveData(data);
-    await syncLeaderboard(interaction.guild);
+    saveData(data, db);
+    await syncLeaderboard(interaction.guild, db);
 
-    await interaction.reply({
-      content: `Added **${formatNumber(coins)} coins** to ${user}\nNew total: **${formatNumber(entry.coins)} coins**`,
-      ephemeral: true
-    });
+    await interaction.editReply(`Added **${formatNumber(coins)} coins** to ${user}\nNew total: **${formatNumber(entry.coins)} coins**`);
 
     return true;
   }
@@ -380,10 +531,7 @@ async function handleInteraction(interaction) {
     const coins = interaction.options.getInteger("coins");
 
     if (!user || !Number.isInteger(coins) || coins < 0) {
-      await interaction.reply({
-        content: "Provide a valid user and a coin total of 0 or more.",
-        ephemeral: true
-      });
+      await interaction.editReply("Provide a valid user and a coin total of 0 or more.");
       return true;
     }
 
@@ -395,13 +543,10 @@ async function handleInteraction(interaction) {
       data.entries = data.entries.filter(e => e.userId !== user.id);
     }
 
-    saveData(data);
-    await syncLeaderboard(interaction.guild);
+    saveData(data, db);
+    await syncLeaderboard(interaction.guild, db);
 
-    await interaction.reply({
-      content: `${user} now has **${formatNumber(coins)} coins**`,
-      ephemeral: true
-    });
+    await interaction.editReply(`${user} now has **${formatNumber(coins)} coins**`);
 
     return true;
   }
@@ -412,20 +557,14 @@ async function handleInteraction(interaction) {
     const coins = interaction.options.getInteger("coins");
 
     if (!user || !Number.isInteger(coins) || coins <= 0) {
-      await interaction.reply({
-        content: "Provide a valid user and a positive coin amount to remove.",
-        ephemeral: true
-      });
+      await interaction.editReply("Provide a valid user and a positive coin amount to remove.");
       return true;
     }
 
     const entry = findEntry(data.entries, user.id);
 
     if (!entry) {
-      await interaction.reply({
-        content: "User not found.",
-        ephemeral: true
-      });
+      await interaction.editReply("User not found.");
       return true;
     }
 
@@ -435,13 +574,10 @@ async function handleInteraction(interaction) {
       data.entries = data.entries.filter(e => e.userId !== user.id);
     }
 
-    saveData(data);
-    await syncLeaderboard(interaction.guild);
+    saveData(data, db);
+    await syncLeaderboard(interaction.guild, db);
 
-    await interaction.reply({
-      content: `Removed **${formatNumber(coins)} coins** from ${user}\nNew total: **${formatNumber(entry.coins || 0)} coins**`,
-      ephemeral: true
-    });
+    await interaction.editReply(`Removed **${formatNumber(coins)} coins** from ${user}\nNew total: **${formatNumber(entry.coins || 0)} coins**`);
 
     return true;
   }
@@ -452,23 +588,17 @@ async function handleInteraction(interaction) {
     const likes = interaction.options.getInteger("likes");
 
     if (!user || !Number.isInteger(likes) || likes <= 0) {
-      await interaction.reply({
-        content: "Provide a valid user and a positive like amount.",
-        ephemeral: true
-      });
+      await interaction.editReply("Provide a valid user and a positive like amount.");
       return true;
     }
 
     const entry = ensureEntry(data.entries, user.id);
     entry.likes += likes;
 
-    saveData(data);
-    await syncLeaderboard(interaction.guild);
+    saveData(data, db);
+    await syncLeaderboard(interaction.guild, db);
 
-    await interaction.reply({
-      content: `Added **${formatNumber(likes)} likes** to ${user}\nNew total: **${formatNumber(entry.likes)} likes**`,
-      ephemeral: true
-    });
+    await interaction.editReply(`Added **${formatNumber(likes)} likes** to ${user}\nNew total: **${formatNumber(entry.likes)} likes**`);
 
     return true;
   }
@@ -479,10 +609,7 @@ async function handleInteraction(interaction) {
     const likes = interaction.options.getInteger("likes");
 
     if (!user || !Number.isInteger(likes) || likes < 0) {
-      await interaction.reply({
-        content: "Provide a valid user and a like total of 0 or more.",
-        ephemeral: true
-      });
+      await interaction.editReply("Provide a valid user and a like total of 0 or more.");
       return true;
     }
 
@@ -493,13 +620,10 @@ async function handleInteraction(interaction) {
       data.entries = data.entries.filter(e => e.userId !== user.id);
     }
 
-    saveData(data);
-    await syncLeaderboard(interaction.guild);
+    saveData(data, db);
+    await syncLeaderboard(interaction.guild, db);
 
-    await interaction.reply({
-      content: `${user} now has **${formatNumber(likes)} likes**`,
-      ephemeral: true
-    });
+    await interaction.editReply(`${user} now has **${formatNumber(likes)} likes**`);
 
     return true;
   }
@@ -513,44 +637,42 @@ async function handleInteraction(interaction) {
       data.entries = data.entries.filter(e => e.userId !== user.id);
 
       if (data.entries.length === before) {
-        await interaction.reply({
-          content: "User not found.",
-          ephemeral: true
-        });
+        await interaction.editReply("User not found.");
         return true;
       }
 
-      saveData(data);
-      await syncLeaderboard(interaction.guild);
+      saveData(data, db);
+      await syncLeaderboard(interaction.guild, db);
 
-      await interaction.reply({
-        content: `Reset ${user} and removed them from the leaderboard.`,
-        ephemeral: true
-      });
+      await interaction.editReply(`Reset ${user} and removed them from the leaderboard.`);
       return true;
     }
 
     data.entries = [];
-    saveData(data);
-    await syncLeaderboard(interaction.guild);
+    saveData(data, db);
+    await syncLeaderboard(interaction.guild, db);
 
-    await interaction.reply({
-      content: "Leaderboard reset.",
-      ephemeral: true
-    });
+    await interaction.editReply("Leaderboard reset.");
 
     return true;
   }
 
   // update
   if (cmd === "leaderboard-update") {
-    await syncLeaderboard(interaction.guild);
+    await syncLeaderboard(interaction.guild, db);
 
-    await interaction.reply({
-      content: "Leaderboard refreshed.",
-      ephemeral: true
-    });
+    await interaction.editReply("Leaderboard refreshed.");
 
+    return true;
+  }
+
+  if (cmd === "leaderboard-sync-roles") {
+    const result = await syncLeaderboardRankRoles(interaction.guild, data.entries);
+    await interaction.editReply(
+      `Leaderboard rank roles synced ✅\n` +
+        `Coins tracked: **${result.coinSummary.length}**\n` +
+        `Likes tracked: **${result.likeSummary.length}**`
+    );
     return true;
   }
 
@@ -558,5 +680,7 @@ async function handleInteraction(interaction) {
 }
 
 module.exports = {
-  handleInteraction
+  handleInteraction,
+  syncLeaderboard,
+  syncLeaderboardRankRoles
 };

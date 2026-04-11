@@ -21,7 +21,7 @@ const slashCommandRouteGroups = [
     moduleKey: "tickets",
     modulePath: "./commands/tickets",
     handlerName: "handleInteraction",
-    commands: ["setup-support-panel"]
+    commands: ["setup-support-panel", "summarize-ticket", "ticket-save-solution"]
   },
   {
     moduleKey: "applications",
@@ -44,8 +44,10 @@ const slashCommandRouteGroups = [
       "setup-chat",
       "setup-giveaways",
       "setup-announcements",
-      "setup-party",
-      "setup-notify-all"
+      "setup-notify-all",
+      "role-select1",
+      "role-select2",
+      "setup-notis"
     ]
   },
   {
@@ -96,8 +98,15 @@ const slashCommandRouteGroups = [
       "leaderboard-add-likes",
       "leaderboard-set-likes",
       "leaderboard-reset",
-      "leaderboard-update"
+      "leaderboard-update",
+      "leaderboard-sync-roles"
     ]
+  },
+  {
+    moduleKey: "chatLevels",
+    modulePath: "./commands/chatLevels",
+    handlerName: "handleInteraction",
+    commands: ["sync-level-roles", "setup-ranks", "ranks-refresh"]
   },
   {
     moduleKey: "fortniteQueue",

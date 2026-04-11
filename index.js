@@ -32,9 +32,11 @@ const staffPanels = require("./commands/staffPanels");
 const communityPosts = require("./commands/communityPosts");
 const applications = require("./commands/applications");
 const forms = require("./commands/forms");
+const chatLevels = require("./commands/chatLevels");
 const { slashCommandRouteMap } = require("./slashCommandRoutes");
 
 const MEE6_BOT_ID = "159985870458322944";
+const CARL_BOT_ID = "235148962103951360";
 const MEE6_ACHIEVEMENT_FORWARD_CHANNEL_ID = "1478930416097562728";
 const MEE6_FORWARD_CONFIRM_MS = 2 * 60 * 1000;
 const MEE6_FORWARD_YES_PREFIX = "mee6_forward_yes";
@@ -59,6 +61,7 @@ const slashCommandModules = {
   communityPosts,
   applications,
   forms,
+  chatLevels,
   staffPanels,
   leaderboard,
   fortniteQueue,
@@ -99,6 +102,58 @@ function extractMee6Text(message) {
 function shouldPromptMee6Forward(message) {
   if (!message || message.author?.id !== MEE6_BOT_ID) return false;
   if (MEE6_IGNORED_CHANNEL_IDS.has(String(message.channelId || ""))) return false;
+  return true;
+}
+
+function extractMessageSearchText(message) {
+  return [
+    message.content || "",
+    ...(message.embeds || []).flatMap(embed => [
+      embed.author?.name || "",
+      embed.title || "",
+      embed.description || "",
+      embed.footer?.text || ""
+    ])
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .toLowerCase();
+}
+
+function isCarlBotNoWhitelistMessage(message) {
+  if (!message?.author?.bot) return false;
+
+  const authorLooksLikeCarl =
+    message.author.id === CARL_BOT_ID ||
+    /carl/i.test(message.author.username || "") ||
+    /carl/i.test(message.author.globalName || "");
+
+  if (!authorLooksLikeCarl) return false;
+  return extractMessageSearchText(message).includes("this server has no whitelisted roles");
+}
+
+async function deleteCarlBotNoWhitelistMessage(message) {
+  if (!isCarlBotNoWhitelistMessage(message)) return false;
+
+  await message.delete().catch(error => {
+    console.error(
+      "[CarlBot] Failed to delete no-whitelisted-roles message",
+      JSON.stringify({
+        channel_id: message.channelId,
+        message_id: message.id,
+        error: error.message
+      })
+    );
+  });
+
+  console.log(
+    "[CarlBot] Deleted no-whitelisted-roles message",
+    JSON.stringify({
+      channel_id: message.channelId,
+      message_id: message.id,
+      author_id: message.author.id
+    })
+  );
   return true;
 }
 
@@ -487,6 +542,15 @@ client.once("clientReady", () => {
   } catch (err) {
     console.error("[Verify panels] Failed to start daily refresh:", err);
   }
+
+  try {
+    if (chatLevels && typeof chatLevels.startRanksLeaderboardTicker === "function") {
+      chatLevels.startRanksLeaderboardTicker(client, db);
+      console.log("[Chat Levels] XP ranks leaderboard ticker started ✅");
+    }
+  } catch (err) {
+    console.error("[Chat Levels] Failed to start ranks leaderboard ticker:", err);
+  }
 });
 
 // ---------- INTERACTION ROUTER ----------
@@ -631,6 +695,12 @@ client.on("interactionCreate", async (interaction) => {
           : false;
       if (handledByRequests) return;
 
+      const handledByRoleSelect =
+        roleSelect && typeof roleSelect.handleSelectMenu === "function"
+          ? await roleSelect.handleSelectMenu(interaction, { client, db })
+          : false;
+      if (handledByRoleSelect) return;
+
       const handledByStaffPanels =
         staffPanels && typeof staffPanels.handleSelectMenu === "function"
           ? await staffPanels.handleSelectMenu(interaction, { client, db })
@@ -731,6 +801,9 @@ client.on("messageCreate", async (message) => {
     const handledMee6Achievement = await queueMee6ForwardPrompt(message, client);
     if (handledMee6Achievement) return;
 
+    const handledCarlBotCleanup = await deleteCarlBotNoWhitelistMessage(message);
+    if (handledCarlBotCleanup) return;
+
     if (message.author.bot) return;
 
     console.log(
@@ -743,6 +816,9 @@ client.on("messageCreate", async (message) => {
     );
 
     await moderation.handleMessage(message, { client, db });
+    if (chatLevels && typeof chatLevels.handleMessage === "function") {
+      await chatLevels.handleMessage(message, { client, db });
+    }
     const handledByPrivateVc =
       privateVc && typeof privateVc.handleMessage === "function"
         ? await privateVc.handleMessage(message, { client, db })
@@ -761,7 +837,7 @@ client.on("messageCreate", async (message) => {
   }
 });
 
-client.on("ready", () => {
+client.on("clientReady", () => {
   logBoot(
     "discord.ready",
     JSON.stringify({
@@ -806,6 +882,16 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
     }
   } catch (err) {
     console.error("voiceStateUpdate error:", err);
+  }
+});
+
+client.on("guildMemberUpdate", async (oldMember, newMember) => {
+  try {
+    if (chatLevels && typeof chatLevels.handleGuildMemberUpdate === "function") {
+      await chatLevels.handleGuildMemberUpdate(oldMember, newMember, { client, db });
+    }
+  } catch (err) {
+    console.error("guildMemberUpdate error:", err);
   }
 });
 
